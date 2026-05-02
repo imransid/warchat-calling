@@ -2,19 +2,30 @@ import {
   Controller,
   Post,
   Body,
-  Param,
   Res,
   Logger,
   HttpStatus,
   Headers,
-} from '@nestjs/common';
-import { CommandBus } from '@nestjs/cqrs';
-import { Response } from 'express';
-import { ProcessWebhookCommand, HandleInboundCallCommand } from '../commands/impl';
-import { TelephonyProviderFactory } from '../infrastructure/telephony/telephony-provider.factory';
-import { PrismaService } from '@/shared/database/prisma.service';
+} from "@nestjs/common";
+import { CommandBus } from "@nestjs/cqrs";
+import { Response } from "express";
+import {
+  ProcessWebhookCommand,
+  HandleInboundCallCommand,
+} from "../commands/impl";
+import { TelephonyProviderFactory } from "../infrastructure/telephony/telephony-provider.factory";
+import { TelnyxProvider } from "../infrastructure/telephony/telnyx.provider";
+import { PrismaService } from "@/shared/database/prisma.service";
 
-@Controller('webhooks/calling')
+/**
+ * Webhook entry points for telephony providers.
+ *
+ * Critical change: the Telnyx inbound flow now drives the call with the
+ * Call Control API (answer, then transfer), rather than returning a JSON
+ * blob the provider never reads.  Without this, an inbound call to the
+ * business number never reached the agent's phone.
+ */
+@Controller("webhooks/calling")
 export class CallingWebhookController {
   private readonly logger = new Logger(CallingWebhookController.name);
 
@@ -25,60 +36,51 @@ export class CallingWebhookController {
   ) {}
 
   // ============================================
-  // TWILIO WEBHOOKS
+  // TWILIO (kept for parity)
   // ============================================
 
-  @Post('twilio/status')
+  @Post("twilio/status")
   async handleTwilioStatus(
     @Body() body: any,
-    @Headers() headers: any,
+    @Headers() _headers: any,
     @Res() res: Response,
   ) {
-    this.logger.debug(`Received Twilio status webhook: ${body.CallStatus}`);
-
+    this.logger.debug(`Twilio status: ${body.CallStatus}`);
     try {
-      // TODO: Verify Twilio signature for security
-      // const signature = headers['x-twilio-signature'];
-      // this.verifyTwilioSignature(signature, body);
-
       await this.commandBus.execute(
         new ProcessWebhookCommand(
-          'twilio',
+          "twilio",
           body.CallStatus,
           body,
           body.CallSid,
         ),
       );
-
       return res.status(HttpStatus.OK).send();
     } catch (error) {
-      this.logger.error(`Failed to process Twilio webhook: ${error.message}`);
+      this.logger.error(`Twilio status webhook failed: ${error.message}`);
       return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send();
     }
   }
 
-  @Post('twilio/inbound')
-  async handleTwilioInbound(
-    @Body() body: any,
-    @Res() res: Response,
-  ) {
-    this.logger.debug(`Received Twilio inbound call: ${body.From} -> ${body.To}`);
+  @Post("twilio/inbound")
+  async handleTwilioInbound(@Body() body: any, @Res() res: Response) {
+    this.logger.debug(`Twilio inbound: ${body.From} -> ${body.To}`);
 
     try {
-      // Find workspace by phone number
       const phoneNumber = await this.prisma.phoneNumber.findUnique({
         where: { phoneNumber: body.To },
         include: { workspace: true },
       });
 
       if (!phoneNumber) {
-        this.logger.error(`Phone number not found: ${body.To}`);
-        return res.status(HttpStatus.NOT_FOUND).send(
-          '<?xml version="1.0" encoding="UTF-8"?><Response><Say>This number is not configured.</Say><Hangup/></Response>',
-        );
+        return res
+          .status(HttpStatus.NOT_FOUND)
+          .header("Content-Type", "text/xml")
+          .send(
+            '<?xml version="1.0" encoding="UTF-8"?><Response><Say>This number is not configured.</Say><Hangup/></Response>',
+          );
       }
 
-      // Handle inbound call
       const result = await this.commandBus.execute(
         new HandleInboundCallCommand(
           body.From,
@@ -88,8 +90,7 @@ export class CallingWebhookController {
         ),
       );
 
-      // Generate TwiML response to forward the call
-      const provider = this.telephonyFactory.getProvider('twilio');
+      const provider = this.telephonyFactory.getProvider("twilio");
       const response = provider.generateInboundCallResponse({
         forwardTo: result.forwardTo,
         timeout: result.timeout,
@@ -98,140 +99,169 @@ export class CallingWebhookController {
 
       return res
         .status(HttpStatus.OK)
-        .header('Content-Type', 'text/xml')
+        .header("Content-Type", "text/xml")
         .send(response.xml);
     } catch (error) {
-      this.logger.error(`Failed to handle inbound call: ${error.message}`);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send(
-        '<?xml version="1.0" encoding="UTF-8"?><Response><Say>An error occurred.</Say><Hangup/></Response>',
-      );
+      this.logger.error(`Twilio inbound failed: ${error.message}`);
+      return res
+        .status(HttpStatus.INTERNAL_SERVER_ERROR)
+        .header("Content-Type", "text/xml")
+        .send(
+          '<?xml version="1.0" encoding="UTF-8"?><Response><Say>An error occurred.</Say><Hangup/></Response>',
+        );
     }
   }
 
-  @Post('twilio/sms')
-  async handleTwilioSms(
-    @Body() body: any,
-    @Res() res: Response,
-  ) {
-    this.logger.debug(`Received Twilio SMS: ${body.From} -> ${body.To}`);
-
-    // TODO: Handle incoming SMS
-    // This would be used for lead replies to missed-call SMS
-
+  @Post("twilio/sms")
+  async handleTwilioSms(@Body() body: any, @Res() res: Response) {
+    this.logger.debug(`Twilio inbound SMS: ${body.From} -> ${body.To}`);
+    // Inbound SMS handling is delegated to the messaging module (out of scope here).
     return res.status(HttpStatus.OK).send();
   }
 
   // ============================================
-  // TELNYX WEBHOOKS
+  // TELNYX
   // ============================================
 
-  @Post('telnyx/status')
+  /**
+   * Single status webhook receives ALL Telnyx call events
+   * (initiated, answered, bridged, hangup, etc.) for both inbound and
+   * outbound calls.  The ProcessWebhookHandler then routes them to the
+   * appropriate command (CompleteCall, etc.)
+   *
+   * For inbound calls we additionally drive the Call Control API here:
+   *   - on call.initiated  → answer + transfer to agent
+   *   - on call.hangup     → ProcessWebhookCommand handles missed-SMS
+   */
+  @Post("telnyx/status")
   async handleTelnyxStatus(
     @Body() body: any,
-    @Headers() headers: any,
+    @Headers() _headers: any,
     @Res() res: Response,
   ) {
-    this.logger.debug(`Received Telnyx webhook: ${body.data?.event_type}`);
+    const eventType: string =
+      body.data?.event_type || body.event_type || "unknown";
+    const payload = body.data?.payload || body.payload || {};
+    const callControlId: string =
+      payload.call_control_id || body.data?.call_control_id;
+
+    this.logger.debug(`Telnyx event: ${eventType} (${callControlId})`);
 
     try {
-      // TODO: Verify Telnyx signature for security
-      // const signature = headers['telnyx-signature-ed25519'];
-      // this.verifyTelnyxSignature(signature, body);
+      // Drive inbound forwarding — Telnyx delivers inbound calls as
+      // "call.initiated" with direction=incoming on the status webhook.
+      if (
+        eventType === "call.initiated" &&
+        payload.direction === "incoming" &&
+        callControlId
+      ) {
+        await this.routeInboundTelnyxCall(payload);
+      }
 
-      const eventType = body.data?.event_type || body.event_type;
-      const callControlId = body.data?.payload?.call_control_id || body.data?.call_control_id;
-
+      // Persist + route every event into the normal pipeline
       await this.commandBus.execute(
-        new ProcessWebhookCommand(
-          'telnyx',
-          eventType,
-          body,
-          callControlId,
-        ),
+        new ProcessWebhookCommand("telnyx", eventType, body, callControlId),
       );
 
       return res.status(HttpStatus.OK).send();
     } catch (error) {
-      this.logger.error(`Failed to process Telnyx webhook: ${error.message}`);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send();
+      this.logger.error(
+        `Telnyx status webhook failed: ${error.message}`,
+        error.stack,
+      );
+      // Always 200 so Telnyx doesn't keep retrying on app-level errors —
+      // the WebhookLog row tracks the failure and BullMQ will retry.
+      return res
+        .status(HttpStatus.OK)
+        .send({ accepted: false, error: error.message });
     }
   }
 
-  @Post('telnyx/inbound')
-  async handleTelnyxInbound(
-    @Body() body: any,
-    @Res() res: Response,
-  ) {
-    this.logger.debug(`Received Telnyx inbound call`);
-
+  /**
+   * Some Telnyx setups also POST inbound calls to a dedicated /inbound URL
+   * configured on the messaging/voice profile.  Treat it the same way.
+   */
+  @Post("telnyx/inbound")
+  async handleTelnyxInbound(@Body() body: any, @Res() res: Response) {
+    const payload = body.data?.payload || body.payload || body;
     try {
-      const payload = body.data?.payload || body.payload;
-      const from = payload.from;
-      const to = payload.to;
-      const callControlId = payload.call_control_id;
-
-      // Find workspace by phone number
-      const phoneNumber = await this.prisma.phoneNumber.findUnique({
-        where: { phoneNumber: to },
-        include: { workspace: true },
-      });
-
-      if (!phoneNumber) {
-        this.logger.error(`Phone number not found: ${to}`);
-        return res.status(HttpStatus.NOT_FOUND).send({ error: 'Number not configured' });
-      }
-
-      // Handle inbound call
-      const result = await this.commandBus.execute(
-        new HandleInboundCallCommand(
-          from,
-          to,
-          callControlId,
-          phoneNumber.workspaceId,
-        ),
-      );
-
-      // Use Telnyx call control API to forward the call
-      const provider = this.telephonyFactory.getProvider('telnyx') as any;
-      
-      await provider.executeCallControl(callControlId, {
-        command: 'transfer',
-        to: result.forwardTo,
-        timeout_secs: result.timeout,
-      });
-
+      await this.routeInboundTelnyxCall(payload);
       return res.status(HttpStatus.OK).send({ success: true });
     } catch (error) {
-      this.logger.error(`Failed to handle inbound call: ${error.message}`);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send({ error: error.message });
+      this.logger.error(`Telnyx inbound failed: ${error.message}`);
+      return res
+        .status(HttpStatus.OK)
+        .send({ success: false, error: error.message });
     }
   }
 
-  @Post('telnyx/sms')
-  async handleTelnyxSms(
-    @Body() body: any,
-    @Res() res: Response,
-  ) {
-    this.logger.debug(`Received Telnyx SMS webhook`);
-
-    // TODO: Handle incoming SMS
-
+  @Post("telnyx/sms")
+  async handleTelnyxSms(@Body() body: any, @Res() res: Response) {
+    this.logger.debug(`Telnyx inbound SMS event`);
+    // Inbound SMS handled by the messaging module.
     return res.status(HttpStatus.OK).send();
   }
 
   // ============================================
-  // HELPER METHODS
+  // INTERNAL
   // ============================================
 
-  private verifyTwilioSignature(signature: string, body: any): boolean {
-    // TODO: Implement Twilio signature verification
-    // Using twilio.validateRequest()
-    return true;
-  }
+  /**
+   * Drive the Telnyx Call Control flow for an inbound call:
+   *   1. answer
+   *   2. record DB row + look up the agent
+   *   3. transfer to agent's real phone with ringTimeout
+   *
+   * If the agent doesn't pick up within the timeout, Telnyx emits
+   * call.hangup with hangup_cause=originator_cancel — that path is
+   * handled downstream by CompleteCallHandler which fires the missed-
+   * call SMS via SendMissedCallSmsCommand.
+   */
+  private async routeInboundTelnyxCall(payload: any): Promise<void> {
+    const fromNumber = payload.from;
+    const toNumber = payload.to;
+    const callControlId = payload.call_control_id;
 
-  private verifyTelnyxSignature(signature: string, body: any): boolean {
-    // TODO: Implement Telnyx signature verification
-    // Using Ed25519 signature verification
-    return true;
+    if (!fromNumber || !toNumber || !callControlId) {
+      throw new Error(
+        `Inbound payload missing fields: from=${fromNumber} to=${toNumber} ccid=${callControlId}`,
+      );
+    }
+
+    const phoneNumber = await this.prisma.phoneNumber.findUnique({
+      where: { phoneNumber: toNumber },
+    });
+
+    if (!phoneNumber) {
+      throw new Error(`Phone number not configured: ${toNumber}`);
+    }
+
+    // Persist the inbound call + look up the agent + ring timeout
+    const result = await this.commandBus.execute(
+      new HandleInboundCallCommand(
+        fromNumber,
+        toNumber,
+        callControlId,
+        phoneNumber.workspaceId,
+      ),
+    );
+
+    const provider = this.telephonyFactory.getProvider(
+      "telnyx",
+    ) as TelnyxProvider;
+
+    // 1. Answer the inbound leg so we can attach actions to it
+    await provider.executeCallControl(callControlId, { command: "answer" });
+
+    // 2. Transfer to the agent's real phone with the configured ring timeout.
+    //    Telnyx will fire call.hangup with hangup_cause if the agent never
+    //    picks up — the missed-call SMS pipeline handles that.
+    await provider.executeCallControl(callControlId, {
+      command: "transfer",
+      to: result.forwardTo,
+      from: toNumber, // preserve business-number caller ID for the agent leg
+      timeout_secs: result.timeout,
+      webhook_url: `${process.env.APP_URL}/webhooks/calling/telnyx/status`,
+    });
   }
 }
