@@ -557,7 +557,10 @@ export class CanUserMakeCallHandler implements IQueryHandler<CanUserMakeCallQuer
       reasons.push("Calling is not enabled for this workspace");
     }
 
-    // Check usage limits
+    // Check usage limits — but ONLY block when auto-charge is OFF.
+    // If autoChargeOverage is true (the client's default per the April 28
+    // Discord update), exceeding the plan limit just charges overage; it
+    // must NOT prevent the call from going out.
     const billingCycle = await this.getCurrentBillingCycle(workspaceId);
     const usage = await this.prisma.usageRecord.aggregate({
       where: {
@@ -570,7 +573,10 @@ export class CanUserMakeCallHandler implements IQueryHandler<CanUserMakeCallQuer
     });
 
     const totalMinutes = Number(usage._sum.minutes || 0);
-    if (totalMinutes >= billingCycle.planMinuteLimit) {
+    if (
+      totalMinutes >= billingCycle.planMinuteLimit &&
+      !config?.autoChargeOverage
+    ) {
       reasons.push("Monthly calling limit exceeded");
     }
 

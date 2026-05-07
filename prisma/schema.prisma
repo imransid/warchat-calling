@@ -20,26 +20,26 @@ enum PhoneNumberStatus {
 }
 
 model PhoneNumber {
-  id               String            @id @default(uuid())
-  phoneNumber      String            @unique
-  provider         String            // 'twilio' or 'telnyx'
-  providerSid      String            @unique // Twilio PhoneNumberSid or Telnyx ID
-  status           PhoneNumberStatus @default(PROVISIONING)
-  capabilities     Json              // { voice: true, sms: true }
-  
+  id           String            @id @default(uuid())
+  phoneNumber  String            @unique
+  provider     String // 'telnyx' (only supported provider)
+  providerSid  String            @unique // Telnyx phone-number ID
+  status       PhoneNumberStatus @default(PROVISIONING)
+  capabilities Json // { voice: true, sms: true }
+
   // Assignment
-  assignedToUserId String?           @unique
-  assignedToUser   User?             @relation(fields: [assignedToUserId], references: [id])
+  assignedToUserId String?   @unique
+  assignedToUser   User?     @relation(fields: [assignedToUserId], references: [id])
   workspaceId      String
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id])
-  
+  workspace        Workspace @relation(fields: [workspaceId], references: [id])
+
   // Metadata
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  releasedAt       DateTime?
-  
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  releasedAt DateTime?
+
   // Relations
-  calls            Call[]
+  calls Call[]
 
   @@index([workspaceId])
   @@index([assignedToUserId])
@@ -67,50 +67,50 @@ enum CallStatus {
 }
 
 model Call {
-  id                String        @id @default(uuid())
-  
+  id String @id @default(uuid())
+
   // Call Identification
-  providerCallSid   String        @unique // Twilio CallSid or Telnyx call_control_id
-  direction         CallDirection
-  status            CallStatus    @default(INITIATED)
-  
+  providerCallSid String        @unique // Telnyx call_control_id
+  direction       CallDirection
+  status          CallStatus    @default(INITIATED)
+
   // Participants
-  fromNumber        String
-  toNumber          String
-  leadId            String
-  lead              Lead          @relation(fields: [leadId], references: [id])
-  agentId           String
-  agent             User          @relation(fields: [agentId], references: [id])
-  
+  fromNumber String
+  toNumber   String
+  leadId     String
+  lead       Lead   @relation(fields: [leadId], references: [id])
+  agentId    String
+  agent      User   @relation(fields: [agentId], references: [id])
+
   // Phone Numbers
-  businessNumberId  String
-  businessNumber    PhoneNumber   @relation(fields: [businessNumberId], references: [id])
-  agentPhoneNumber  String        // Agent's real phone number
-  customerNumber    String        // Customer's phone number
-  
+  businessNumberId String
+  businessNumber   PhoneNumber @relation(fields: [businessNumberId], references: [id])
+  agentPhoneNumber String // Agent's real phone number
+  customerNumber   String // Customer's phone number
+
   // Call Details
-  duration          Int           @default(0) // Duration in seconds
-  recordingUrl      String?
-  recordingSid      String?
-  
+  duration     Int     @default(0) // Duration in seconds
+  recordingUrl String?
+  recordingSid String?
+
   // Timestamps
-  initiatedAt       DateTime      @default(now())
-  ringingAt         DateTime?
-  answeredAt        DateTime?
-  completedAt       DateTime?
-  
+  initiatedAt DateTime  @default(now())
+  ringingAt   DateTime?
+  answeredAt  DateTime?
+  completedAt DateTime?
+
   // Metadata
-  providerMetadata  Json?         // Raw provider webhook data
-  errorMessage      String?
-  
+  providerMetadata Json? // Raw provider webhook data
+  errorMessage     String?
+
   // Relations
-  workspaceId       String
-  workspace         Workspace     @relation(fields: [workspaceId], references: [id])
-  callEvents        CallEvent[]
-  usageRecords      UsageRecord[]
-  
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  workspaceId  String
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id])
+  callEvents   CallEvent[]
+  usageRecords UsageRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([leadId])
   @@index([agentId])
@@ -140,18 +140,18 @@ enum CallEventType {
 }
 
 model CallEvent {
-  id              String        @id @default(uuid())
-  callId          String
-  call            Call          @relation(fields: [callId], references: [id], onDelete: Cascade)
-  
-  eventType       CallEventType
-  timestamp       DateTime      @default(now())
-  payload         Json          // Event-specific data
-  
+  id     String @id @default(uuid())
+  callId String
+  call   Call   @relation(fields: [callId], references: [id], onDelete: Cascade)
+
+  eventType CallEventType
+  timestamp DateTime      @default(now())
+  payload   Json // Event-specific data
+
   // Provider webhook data
-  providerEventId String?       @unique
+  providerEventId String? @unique
   webhookPayload  Json?
-  
+
   @@index([callId, timestamp])
   @@map("call_events")
 }
@@ -167,49 +167,49 @@ enum BillingCycleStatus {
 }
 
 model BillingCycle {
-  id              String              @id @default(uuid())
-  workspaceId     String
-  workspace       Workspace           @relation(fields: [workspaceId], references: [id])
-  
-  startDate       DateTime
-  endDate         DateTime
-  status          BillingCycleStatus  @default(ACTIVE)
-  
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  startDate DateTime
+  endDate   DateTime
+  status    BillingCycleStatus @default(ACTIVE)
+
   // Limits
-  planMinuteLimit Int                 // Minutes included in plan
-  overageRate     Decimal             @db.Decimal(10, 4) // Per-minute overage cost
-  
+  planMinuteLimit Int // Minutes included in plan
+  overageRate     Decimal @db.Decimal(10, 4) // Per-minute overage cost
+
   // Usage
-  usageRecords    UsageRecord[]
-  
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  usageRecords UsageRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([workspaceId, startDate])
   @@map("billing_cycles")
 }
 
 model UsageRecord {
-  id              String        @id @default(uuid())
-  
-  callId          String
-  call            Call          @relation(fields: [callId], references: [id])
-  
-  billingCycleId  String
-  billingCycle    BillingCycle  @relation(fields: [billingCycleId], references: [id])
-  
-  workspaceId     String
-  workspace       Workspace     @relation(fields: [workspaceId], references: [id])
-  
-  agentId         String
-  agent           User          @relation(fields: [agentId], references: [id])
-  
+  id String @id @default(uuid())
+
+  callId String
+  call   Call   @relation(fields: [callId], references: [id])
+
+  billingCycleId String
+  billingCycle   BillingCycle @relation(fields: [billingCycleId], references: [id])
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  agentId String
+  agent   User   @relation(fields: [agentId], references: [id])
+
   // Metered Usage
-  minutes         Decimal       @db.Decimal(10, 4) // Fractional minutes
-  cost            Decimal       @db.Decimal(10, 4) // Cost for this call
-  isOverage       Boolean       @default(false)
-  
-  recordedAt      DateTime      @default(now())
+  minutes   Decimal @db.Decimal(10, 4) // Fractional minutes
+  cost      Decimal @db.Decimal(10, 4) // Cost for this call
+  isOverage Boolean @default(false)
+
+  recordedAt DateTime @default(now())
 
   @@index([billingCycleId, workspaceId])
   @@index([agentId, billingCycleId])
@@ -221,31 +221,31 @@ model UsageRecord {
 // ============================================
 
 model CallingConfiguration {
-  id                      String    @id @default(uuid())
-  workspaceId             String    @unique
-  workspace               Workspace @relation(fields: [workspaceId], references: [id])
-  
+  id          String    @id @default(uuid())
+  workspaceId String    @unique
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
   // Inbound Settings
-  ringTimeout             Int       @default(25) // Seconds - Client requirement: 25 seconds
-  missedCallSmsTemplate   String    @default("Currently in an appointment. I will call you back shortly or text me please.") // Client's exact template
-  
+  ringTimeout           Int    @default(25) // Seconds - Client requirement: 25 seconds
+  missedCallSmsTemplate String @default("Currently in an appointment. I will call you back shortly or text me please.") // Client's exact template
+
   // Provider Settings
-  provider                String    @default("telnyx") // Client uses Telnyx only
-  providerAccountSid      String    @db.Text
-  providerAuthToken       String    @db.Text // Should be encrypted
-  
+  provider           String @default("telnyx") // Client uses Telnyx only
+  providerAccountSid String @db.Text
+  providerAuthToken  String @db.Text // Should be encrypted
+
   // Webhook Settings
-  webhookUrl              String?
-  webhookRetryAttempts    Int       @default(3)
-  webhookRetryDelay       Int       @default(5000) // Milliseconds
-  
+  webhookUrl           String?
+  webhookRetryAttempts Int     @default(3)
+  webhookRetryDelay    Int     @default(5000) // Milliseconds
+
   // Feature Flags
-  callingEnabled          Boolean   @default(true)
-  recordingEnabled        Boolean   @default(false)
-  autoChargeOverage       Boolean   @default(true) // Client requirement: auto-charge, don't block
-  
-  createdAt               DateTime  @default(now())
-  updatedAt               DateTime  @updatedAt
+  callingEnabled    Boolean @default(true)
+  recordingEnabled  Boolean @default(false)
+  autoChargeOverage Boolean @default(true) // Client requirement: auto-charge, don't block
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("calling_configurations")
 }
@@ -263,29 +263,29 @@ enum WebhookStatus {
 }
 
 model WebhookLog {
-  id              String        @id @default(uuid())
-  
+  id String @id @default(uuid())
+
   // Provider webhook identification
-  providerEventId String        @unique
-  provider        String        // 'twilio' or 'telnyx'
+  providerEventId String @unique
+  provider        String // 'telnyx' (only supported provider)
   eventType       String
-  
+
   // Processing
-  status          WebhookStatus @default(RECEIVED)
-  retryCount      Int           @default(0)
-  lastRetryAt     DateTime?
-  processedAt     DateTime?
-  
+  status      WebhookStatus @default(RECEIVED)
+  retryCount  Int           @default(0)
+  lastRetryAt DateTime?
+  processedAt DateTime?
+
   // Payload
-  payload         Json
-  errorMessage    String?
-  
+  payload      Json
+  errorMessage String?
+
   // Related entities
-  callId          String?
-  workspaceId     String?
-  
-  receivedAt      DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  callId      String?
+  workspaceId String?
+
+  receivedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([providerEventId])
   @@index([status, retryCount])
@@ -297,59 +297,59 @@ model WebhookLog {
 // ============================================
 
 model Workspace {
-  id                     String                 @id @default(uuid())
-  name                   String
-  
+  id   String @id @default(uuid())
+  name String
+
   // Relations
-  phoneNumbers           PhoneNumber[]
-  calls                  Call[]
-  billingCycles          BillingCycle[]
-  usageRecords           UsageRecord[]
-  callingConfiguration   CallingConfiguration?
-  users                  User[]
-  leads                  Lead[]
-  
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
+  phoneNumbers         PhoneNumber[]
+  calls                Call[]
+  billingCycles        BillingCycle[]
+  usageRecords         UsageRecord[]
+  callingConfiguration CallingConfiguration?
+  users                User[]
+  leads                Lead[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("workspaces")
 }
 
 model User {
-  id                String        @id @default(uuid())
-  email             String        @unique
-  name              String
-  phoneNumber       String?       // Agent's real phone number
-  
-  workspaceId       String
-  workspace         Workspace     @relation(fields: [workspaceId], references: [id])
-  
+  id          String  @id @default(uuid())
+  email       String  @unique
+  name        String
+  phoneNumber String? // Agent's real phone number
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
   // Relations
-  assignedNumber    PhoneNumber?
-  calls             Call[]
-  usageRecords      UsageRecord[]
-  
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  assignedNumber PhoneNumber?
+  calls          Call[]
+  usageRecords   UsageRecord[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([workspaceId])
   @@map("users")
 }
 
 model Lead {
-  id              String    @id @default(uuid())
-  phoneNumber     String
-  name            String?
-  email           String?
-  
-  workspaceId     String
-  workspace       Workspace @relation(fields: [workspaceId], references: [id])
-  
+  id          String  @id @default(uuid())
+  phoneNumber String
+  name        String?
+  email       String?
+
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
   // Relations
-  calls           Call[]
-  
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  calls Call[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([workspaceId, phoneNumber])
   @@map("leads")

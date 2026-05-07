@@ -1,12 +1,12 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { CommandBus, EventBus } from '@nestjs/cqrs';
-import { InitiateOutboundCallHandler } from '../commands/handlers/initiate-outbound-call.handler';
-import { PrismaService } from '@/shared/database/prisma.service';
-import { TelephonyProviderFactory } from '../infrastructure/telephony/telephony-provider.factory';
-import { InitiateOutboundCallCommand } from '../commands/impl';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Test, TestingModule } from "@nestjs/testing";
+import { CommandBus, EventBus } from "@nestjs/cqrs";
+import { InitiateOutboundCallHandler } from "../commands/handlers/initiate-outbound-call.handler";
+import { PrismaService } from "@/shared/database/prisma.service";
+import { TelephonyProviderFactory } from "../infrastructure/telephony/telephony-provider.factory";
+import { InitiateOutboundCallCommand } from "../commands/impl";
+import { BadRequestException, ForbiddenException } from "@nestjs/common";
 
-describe('InitiateOutboundCallHandler', () => {
+describe("InitiateOutboundCallHandler", () => {
   let handler: InitiateOutboundCallHandler;
   let prismaService: PrismaService;
   let telephonyFactory: TelephonyProviderFactory;
@@ -60,9 +60,13 @@ describe('InitiateOutboundCallHandler', () => {
       ],
     }).compile();
 
-    handler = module.get<InitiateOutboundCallHandler>(InitiateOutboundCallHandler);
+    handler = module.get<InitiateOutboundCallHandler>(
+      InitiateOutboundCallHandler,
+    );
     prismaService = module.get<PrismaService>(PrismaService);
-    telephonyFactory = module.get<TelephonyProviderFactory>(TelephonyProviderFactory);
+    telephonyFactory = module.get<TelephonyProviderFactory>(
+      TelephonyProviderFactory,
+    );
     eventBus = module.get<EventBus>(EventBus);
   });
 
@@ -70,72 +74,77 @@ describe('InitiateOutboundCallHandler', () => {
     jest.clearAllMocks();
   });
 
-  describe('execute', () => {
+  describe("execute", () => {
     const validCommand = new InitiateOutboundCallCommand(
-      'lead-123',
-      'agent-456',
-      'workspace-789',
+      "lead-123",
+      "agent-456",
+      "workspace-789",
     );
 
     const mockAgent = {
-      id: 'agent-456',
-      phoneNumber: '+14155551234',
+      id: "agent-456",
+      phoneNumber: "+14155551234",
       assignedNumber: {
-        id: 'number-123',
-        phoneNumber: '+14155559999',
+        id: "number-123",
+        phoneNumber: "+14155559999",
       },
     };
 
     const mockLead = {
-      id: 'lead-123',
-      phoneNumber: '+14155555678',
+      id: "lead-123",
+      phoneNumber: "+14155555678",
     };
 
     const mockConfig = {
-      workspaceId: 'workspace-789',
+      workspaceId: "workspace-789",
       callingEnabled: true,
-      provider: 'twilio',
+      provider: "telnyx",
+      autoChargeOverage: false,
     };
 
     const mockBillingCycle = {
-      id: 'cycle-123',
+      id: "cycle-123",
       planMinuteLimit: 1000,
     };
 
-    it('should successfully initiate an outbound call', async () => {
+    it("should successfully initiate an outbound call", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue(mockAgent);
       mockPrismaService.lead.findUnique.mockResolvedValue(mockLead);
-      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(mockConfig);
-      mockPrismaService.billingCycle.findFirst.mockResolvedValue(mockBillingCycle);
+      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(
+        mockConfig,
+      );
+      mockPrismaService.billingCycle.findFirst.mockResolvedValue(
+        mockBillingCycle,
+      );
       mockPrismaService.usageRecord.aggregate.mockResolvedValue({
         _sum: { minutes: 500 },
       });
       mockPrismaService.call.create.mockResolvedValue({
-        id: 'call-123',
-        providerCallSid: '',
+        id: "call-123",
+        providerCallSid: "",
       });
       mockTelephonyProvider.initiateOutboundCall.mockResolvedValue({
-        sid: 'twilio-call-sid-123',
-        status: 'initiated',
+        sid: "telnyx-call-control-id-123",
+        status: "initiated",
       });
 
       // Act
       const result = await handler.execute(validCommand);
 
       // Assert
-      expect(result).toBe('call-123');
+      expect(result).toBe("call-123");
       expect(mockTelephonyProvider.initiateOutboundCall).toHaveBeenCalledWith(
         expect.objectContaining({
-          from: '+14155559999', // Business number
-          to: '+14155551234', // Agent's real phone first
+          from: "+14155559999", // Business number
+          to: "+14155551234", // Agent's real phone first
         }),
       );
       expect(mockPrismaService.call.update).toHaveBeenCalled();
       expect(mockEventBus.publish).toHaveBeenCalled();
     });
 
-    it('should throw error if agent not found', async () => {
+    it("should throw error if agent not found", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue(null);
 
@@ -145,7 +154,7 @@ describe('InitiateOutboundCallHandler', () => {
       );
     });
 
-    it('should throw error if agent has no phone number', async () => {
+    it("should throw error if agent has no phone number", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue({
         ...mockAgent,
@@ -158,7 +167,7 @@ describe('InitiateOutboundCallHandler', () => {
       );
     });
 
-    it('should throw error if agent has no assigned business number', async () => {
+    it("should throw error if agent has no assigned business number", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue({
         ...mockAgent,
@@ -171,7 +180,7 @@ describe('InitiateOutboundCallHandler', () => {
       );
     });
 
-    it('should throw error if calling is not enabled', async () => {
+    it("should throw error if calling is not enabled", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue(mockAgent);
       mockPrismaService.lead.findUnique.mockResolvedValue(mockLead);
@@ -186,12 +195,16 @@ describe('InitiateOutboundCallHandler', () => {
       );
     });
 
-    it('should throw error if usage limit exceeded', async () => {
+    it("should throw error if usage limit exceeded", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue(mockAgent);
       mockPrismaService.lead.findUnique.mockResolvedValue(mockLead);
-      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(mockConfig);
-      mockPrismaService.billingCycle.findFirst.mockResolvedValue(mockBillingCycle);
+      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(
+        mockConfig,
+      );
+      mockPrismaService.billingCycle.findFirst.mockResolvedValue(
+        mockBillingCycle,
+      );
       mockPrismaService.usageRecord.aggregate.mockResolvedValue({
         _sum: { minutes: 1500 }, // Over limit
       });
@@ -202,21 +215,25 @@ describe('InitiateOutboundCallHandler', () => {
       );
     });
 
-    it('should handle telephony provider errors', async () => {
+    it("should handle telephony provider errors", async () => {
       // Arrange
       mockPrismaService.user.findUnique.mockResolvedValue(mockAgent);
       mockPrismaService.lead.findUnique.mockResolvedValue(mockLead);
-      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(mockConfig);
-      mockPrismaService.billingCycle.findFirst.mockResolvedValue(mockBillingCycle);
+      mockPrismaService.callingConfiguration.findUnique.mockResolvedValue(
+        mockConfig,
+      );
+      mockPrismaService.billingCycle.findFirst.mockResolvedValue(
+        mockBillingCycle,
+      );
       mockPrismaService.usageRecord.aggregate.mockResolvedValue({
         _sum: { minutes: 500 },
       });
       mockPrismaService.call.create.mockResolvedValue({
-        id: 'call-123',
-        providerCallSid: '',
+        id: "call-123",
+        providerCallSid: "",
       });
       mockTelephonyProvider.initiateOutboundCall.mockRejectedValue(
-        new Error('Provider API error'),
+        new Error("Provider API error"),
       );
 
       // Act & Assert
@@ -228,8 +245,8 @@ describe('InitiateOutboundCallHandler', () => {
       expect(mockPrismaService.call.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: 'FAILED',
-            errorMessage: 'Provider API error',
+            status: "FAILED",
+            errorMessage: "Provider API error",
           }),
         }),
       );
@@ -241,13 +258,15 @@ describe('InitiateOutboundCallHandler', () => {
 // E2E TESTS
 // ============================================
 
-describe('Calling API (e2e)', () => {
+describe("Calling API (e2e)", () => {
   let app: any;
 
   beforeAll(async () => {
     // Setup test app
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [/* AppModule */],
+      imports: [
+        /* AppModule */
+      ],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -258,26 +277,26 @@ describe('Calling API (e2e)', () => {
     await app.close();
   });
 
-  describe('POST /api/calling/calls/outbound', () => {
-    it('should initiate an outbound call', () => {
+  describe("POST /api/calling/calls/outbound", () => {
+    it("should initiate an outbound call", () => {
       // Test implementation
     });
 
-    it('should return 403 if calling not allowed', () => {
+    it("should return 403 if calling not allowed", () => {
       // Test implementation
     });
 
-    it('should return 400 if lead not found', () => {
+    it("should return 400 if lead not found", () => {
       // Test implementation
     });
   });
 
-  describe('GET /api/calling/calls/:callId', () => {
-    it('should return call details', () => {
+  describe("GET /api/calling/calls/:callId", () => {
+    it("should return call details", () => {
       // Test implementation
     });
 
-    it('should return 404 if call not found', () => {
+    it("should return 404 if call not found", () => {
       // Test implementation
     });
   });

@@ -18,12 +18,21 @@ import { TelnyxProvider } from "../infrastructure/telephony/telnyx.provider";
 import { PrismaService } from "@/shared/database/prisma.service";
 
 /**
- * Webhook entry points for telephony providers.
+ * Webhook entry points for Telnyx (the only supported provider per the
+ * April 28 Discord update).
  *
- * Critical change: the Telnyx inbound flow now drives the call with the
- * Call Control API (answer, then transfer), rather than returning a JSON
- * blob the provider never reads.  Without this, an inbound call to the
- * business number never reached the agent's phone.
+ * Inbound calls are driven via the Telnyx Call Control API:
+ *   1. `call.initiated` (direction=incoming) → answer + transfer to agent
+ *   2. `call.answered`  (direction=outgoing on the bridged leg) → noop
+ *   3. `call.hangup`    → CompleteCallHandler triggers missed-SMS if needed
+ *
+ * Outbound calls follow the agent-first dial pattern:
+ *   1. InitiateOutboundCallHandler dials the AGENT first.
+ *   2. On `call.answered` (direction=outgoing), this controller issues a
+ *      `transfer` action that bridges the customer in, with the business
+ *      number set as caller ID (number masking).
+ *   3. On `call.hangup`, CompleteCallHandler closes the call and updates
+ *      usage metering.
  */
 @Controller("webhooks/calling")
 export class CallingWebhookController {
@@ -36,102 +45,19 @@ export class CallingWebhookController {
   ) {}
 
   // ============================================
-  // TWILIO (kept for parity)
-  // ============================================
-
-  @Post("twilio/status")
-  async handleTwilioStatus(
-    @Body() body: any,
-    @Headers() _headers: any,
-    @Res() res: Response,
-  ) {
-    this.logger.debug(`Twilio status: ${body.CallStatus}`);
-    try {
-      await this.commandBus.execute(
-        new ProcessWebhookCommand(
-          "twilio",
-          body.CallStatus,
-          body,
-          body.CallSid,
-        ),
-      );
-      return res.status(HttpStatus.OK).send();
-    } catch (error) {
-      this.logger.error(`Twilio status webhook failed: ${error.message}`);
-      return res.status(HttpStatus.INTERNAL_SERVER_ERROR).send();
-    }
-  }
-
-  @Post("twilio/inbound")
-  async handleTwilioInbound(@Body() body: any, @Res() res: Response) {
-    this.logger.debug(`Twilio inbound: ${body.From} -> ${body.To}`);
-
-    try {
-      const phoneNumber = await this.prisma.phoneNumber.findUnique({
-        where: { phoneNumber: body.To },
-        include: { workspace: true },
-      });
-
-      if (!phoneNumber) {
-        return res
-          .status(HttpStatus.NOT_FOUND)
-          .header("Content-Type", "text/xml")
-          .send(
-            '<?xml version="1.0" encoding="UTF-8"?><Response><Say>This number is not configured.</Say><Hangup/></Response>',
-          );
-      }
-
-      const result = await this.commandBus.execute(
-        new HandleInboundCallCommand(
-          body.From,
-          body.To,
-          body.CallSid,
-          phoneNumber.workspaceId,
-        ),
-      );
-
-      const provider = this.telephonyFactory.getProvider("twilio");
-      const response = provider.generateInboundCallResponse({
-        forwardTo: result.forwardTo,
-        timeout: result.timeout,
-        callbackUrl: `${process.env.APP_URL}/webhooks/calling/twilio/status`,
-      });
-
-      return res
-        .status(HttpStatus.OK)
-        .header("Content-Type", "text/xml")
-        .send(response.xml);
-    } catch (error) {
-      this.logger.error(`Twilio inbound failed: ${error.message}`);
-      return res
-        .status(HttpStatus.INTERNAL_SERVER_ERROR)
-        .header("Content-Type", "text/xml")
-        .send(
-          '<?xml version="1.0" encoding="UTF-8"?><Response><Say>An error occurred.</Say><Hangup/></Response>',
-        );
-    }
-  }
-
-  @Post("twilio/sms")
-  async handleTwilioSms(@Body() body: any, @Res() res: Response) {
-    this.logger.debug(`Twilio inbound SMS: ${body.From} -> ${body.To}`);
-    // Inbound SMS handling is delegated to the messaging module (out of scope here).
-    return res.status(HttpStatus.OK).send();
-  }
-
-  // ============================================
   // TELNYX
   // ============================================
 
   /**
    * Single status webhook receives ALL Telnyx call events
    * (initiated, answered, bridged, hangup, etc.) for both inbound and
-   * outbound calls.  The ProcessWebhookHandler then routes them to the
-   * appropriate command (CompleteCall, etc.)
+   * outbound calls. The ProcessWebhookHandler then routes them to the
+   * appropriate command (CompleteCall, etc.).
    *
-   * For inbound calls we additionally drive the Call Control API here:
-   *   - on call.initiated  → answer + transfer to agent
-   *   - on call.hangup     → ProcessWebhookCommand handles missed-SMS
+   * In addition we drive the Call Control API inline here:
+   *   - on inbound  call.initiated  → answer + transfer to agent
+   *   - on outbound call.answered   → transfer to bridge customer
+   *   - on          call.hangup     → ProcessWebhookCommand handles missed-SMS
    */
   @Post("telnyx/status")
   async handleTelnyxStatus(
@@ -148,7 +74,7 @@ export class CallingWebhookController {
     this.logger.debug(`Telnyx event: ${eventType} (${callControlId})`);
 
     try {
-      // Drive inbound forwarding — Telnyx delivers inbound calls as
+      // Inbound forwarding — Telnyx delivers inbound calls as
       // "call.initiated" with direction=incoming on the status webhook.
       if (
         eventType === "call.initiated" &&
@@ -156,6 +82,17 @@ export class CallingWebhookController {
         callControlId
       ) {
         await this.routeInboundTelnyxCall(payload);
+      }
+
+      // Outbound bridge — when the agent leg of an outbound call is
+      // answered, dial the customer and bridge them in. Without this, the
+      // agent picks up to silence and the customer is never reached.
+      if (
+        eventType === "call.answered" &&
+        payload.direction === "outgoing" &&
+        callControlId
+      ) {
+        await this.bridgeOutboundCustomer(callControlId);
       }
 
       // Persist + route every event into the normal pipeline
@@ -179,7 +116,7 @@ export class CallingWebhookController {
 
   /**
    * Some Telnyx setups also POST inbound calls to a dedicated /inbound URL
-   * configured on the messaging/voice profile.  Treat it the same way.
+   * configured on the messaging/voice profile. Treat it the same way.
    */
   @Post("telnyx/inbound")
   async handleTelnyxInbound(@Body() body: any, @Res() res: Response) {
@@ -263,5 +200,106 @@ export class CallingWebhookController {
       timeout_secs: result.timeout,
       webhook_url: `${process.env.APP_URL}/webhooks/calling/telnyx/status`,
     });
+  }
+
+  /**
+   * SOW #3 — Click-to-Call (Outbound):
+   *
+   *   "Agent clicks 'Call' on a lead. The system rings the agent's real
+   *    phone first; once the agent answers, the system bridges the
+   *    customer in."
+   *
+   * Step-by-step:
+   *   1. InitiateOutboundCallHandler dials the AGENT first via Telnyx.
+   *   2. Telnyx fires call.answered when the agent picks up.
+   *   3. We look up the call by providerCallSid, read the customerNumber
+   *      we stashed in providerMetadata, and issue a `transfer` action
+   *      against the same call_control_id. Telnyx then dials the customer
+   *      and bridges both legs — customer sees the business number as
+   *      caller ID (because that's the `from` we pass).
+   *
+   * If the customer never picks up, Telnyx emits call.hangup with the
+   * appropriate hangup_cause and CompleteCallHandler closes the call out.
+   */
+  private async bridgeOutboundCustomer(callControlId: string): Promise<void> {
+    const call = await this.prisma.call.findUnique({
+      where: { providerCallSid: callControlId },
+      include: { businessNumber: true },
+    });
+
+    if (!call) {
+      this.logger.warn(
+        `Outbound bridge skipped — no call row for ${callControlId}`,
+      );
+      return;
+    }
+
+    if (call.direction !== "OUTBOUND") return;
+
+    const meta = (call.providerMetadata as any) || {};
+    if (meta.stage !== "DIALING_AGENT") {
+      // Already bridged (or in some other stage) — don't double-transfer.
+      return;
+    }
+
+    const customerNumber = meta.customerNumber || call.customerNumber;
+    if (!customerNumber) {
+      this.logger.error(
+        `Outbound bridge failed — no customerNumber on call ${call.id}`,
+      );
+      return;
+    }
+
+    const provider = this.telephonyFactory.getProvider(
+      "telnyx",
+    ) as TelnyxProvider;
+
+    try {
+      await provider.executeCallControl(callControlId, {
+        command: "transfer",
+        to: customerNumber,
+        from: call.businessNumber.phoneNumber, // Number masking — customer sees business number
+        webhook_url: `${process.env.APP_URL}/webhooks/calling/telnyx/status`,
+      });
+
+      // Mark the stage so we don't bridge twice if a duplicate webhook fires.
+      await this.prisma.call.update({
+        where: { id: call.id },
+        data: {
+          providerMetadata: {
+            ...meta,
+            stage: "BRIDGING_CUSTOMER",
+          } as any,
+        },
+      });
+
+      await this.prisma.callEvent.create({
+        data: {
+          callId: call.id,
+          eventType: "CUSTOMER_RINGING",
+          timestamp: new Date(),
+          payload: {
+            customerNumber,
+            stage: "BRIDGING_CUSTOMER",
+          },
+        },
+      });
+
+      this.logger.log(
+        `Outbound bridge: dialing customer ${customerNumber} for call ${call.id}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Outbound bridge FAILED for call ${call.id}: ${error.message}`,
+      );
+      // Tear the call down so the agent isn't stuck on a dead leg.
+      try {
+        await provider.executeCallControl(callControlId, {
+          command: "hangup",
+        });
+      } catch {
+        /* swallow */
+      }
+    }
   }
 }

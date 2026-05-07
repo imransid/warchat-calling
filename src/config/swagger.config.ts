@@ -32,7 +32,7 @@ Authorization: Bearer <your-jwt-token>
 - **Webhook endpoints**: No rate limit (provider-verified)
 
 ## Webhooks
-Webhook endpoints are called by telephony providers (Twilio/Telnyx) and do not require authentication.
+Webhook endpoints are called by Telnyx and do not require authentication.
 They use signature verification for security.
 
 ## Error Handling
@@ -95,7 +95,7 @@ For issues or questions, contact: support@warmchats.com
       )
       .addTag('calling', 'Call management endpoints - Initiate calls, retrieve history, check capabilities')
       .addTag('admin', 'Administration endpoints - Manage phone numbers, configuration, and usage limits')
-      .addTag('webhooks', 'Webhook endpoints - Called by telephony providers (Twilio/Telnyx)')
+      .addTag('webhooks', 'Webhook endpoints - Called by Telnyx')
       .addTag('analytics', 'Analytics endpoints - Dashboard stats, usage reports, performance metrics')
       .addServer('http://localhost:3000', 'Local Development')
       .addServer('https://api-staging.warmchats.com', 'Staging')
@@ -199,7 +199,7 @@ export const OpenAPIExamples = {
   PhoneNumber: {
     id: '123e4567-e89b-12d3-a456-426614174000',
     phoneNumber: '+14155551234',
-    provider: 'twilio',
+    provider: 'telnyx',
     providerSid: 'PN1234567890abcdef1234567890abcdef',
     status: 'ACTIVE',
     capabilities: {

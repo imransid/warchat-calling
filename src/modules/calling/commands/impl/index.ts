@@ -1,4 +1,4 @@
-import { ICommand } from '@nestjs/cqrs';
+import { ICommand } from "@nestjs/cqrs";
 
 // ============================================
 // OUTBOUND CALLING COMMANDS
@@ -33,7 +33,12 @@ export class CompleteCallCommand implements ICommand {
     public readonly callId: string,
     public readonly providerCallSid: string,
     public readonly duration: number,
-    public readonly status: 'COMPLETED' | 'NO_ANSWER' | 'BUSY' | 'FAILED' | 'CANCELED',
+    public readonly status:
+      | "COMPLETED"
+      | "NO_ANSWER"
+      | "BUSY"
+      | "FAILED"
+      | "CANCELED",
     public readonly timestamp: Date,
   ) {}
 }
@@ -119,7 +124,7 @@ export class EnforceUsageLimitCommand implements ICommand {
 
 export class ProcessWebhookCommand implements ICommand {
   constructor(
-    public readonly provider: 'twilio' | 'telnyx',
+    public readonly provider: "telnyx",
     public readonly eventType: string,
     public readonly payload: any,
     public readonly providerEventId: string,
@@ -127,7 +132,5 @@ export class ProcessWebhookCommand implements ICommand {
 }
 
 export class RetryFailedWebhookCommand implements ICommand {
-  constructor(
-    public readonly webhookLogId: string,
-  ) {}
+  constructor(public readonly webhookLogId: string) {}
 }

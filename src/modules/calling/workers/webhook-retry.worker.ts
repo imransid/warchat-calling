@@ -13,7 +13,7 @@ import { ProcessWebhookCommand } from "../commands/impl";
 import { PrismaService } from "@/shared/database/prisma.service";
 
 /**
- * Auto-retry worker for failed Telnyx/Twilio webhooks.
+ * Auto-retry worker for failed Telnyx webhooks.
  *
  * SOW #8 ("Robust webhook retry + failure handling") requires that a
  * webhook which fails inside our app is automatically retried with a
@@ -191,7 +191,11 @@ export class WebhookRetryProcessor {
           log.provider as any,
           eventType,
           payload,
-          log.callId ?? undefined,
+          // 4th arg is providerEventId — the unique idempotency key the
+          // upstream handler upserts WebhookLog by. Passing log.callId
+          // here was a bug: it would either create a stray webhook row
+          // keyed by a callId-shaped string or collide with a real event.
+          log.providerEventId,
         ),
       );
 

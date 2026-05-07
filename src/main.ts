@@ -72,11 +72,7 @@ async function bootstrap() {
   // ============================================
 
   app.setGlobalPrefix("api", {
-    exclude: [
-      "health",
-      "webhooks/calling/twilio/(.*)",
-      "webhooks/calling/telnyx/(.*)",
-    ],
+    exclude: ["health", "webhooks/calling/telnyx/(.*)"],
   });
 
   // ============================================

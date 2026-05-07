@@ -1,24 +1,25 @@
 // ============================================
-// TELEPHONY PROVIDER INTERFACE
+// TELEPHONY PROVIDER INTERFACE — Telnyx only
 // ============================================
+//
+// Inbound call handling is driven by Telnyx Call Control actions
+// (executeCallControl on the concrete TelnyxProvider), not by returning a
+// TwiML/TeXML XML body, so there is no `generateInboundCallResponse`
+// method on this interface anymore.
 
 export interface OutboundCallRequest {
-  from: string; // Business number
-  to: string; // Phone number to dial
+  from: string; // Business number (caller ID)
+  to: string; // Phone number to dial first (the agent)
   callbackUrl: string; // Webhook URL for status updates
-  callbackMethod: 'POST' | 'GET';
+  callbackMethod: "POST" | "GET";
   metadata?: Record<string, any>;
   timeout?: number;
 }
 
 export interface OutboundCallResponse {
-  sid: string; // Provider call ID
+  sid: string; // Provider call ID (Telnyx call_control_id)
   status: string;
   direction: string;
-}
-
-export interface InboundCallResponse {
-  xml: string; // TwiML or TeXML response
 }
 
 export interface SendSmsRequest {
@@ -54,12 +55,6 @@ export abstract class ITelephonyProvider {
   abstract initiateOutboundCall(
     request: OutboundCallRequest,
   ): Promise<OutboundCallResponse>;
-
-  abstract generateInboundCallResponse(params: {
-    forwardTo: string;
-    timeout: number;
-    callbackUrl: string;
-  }): InboundCallResponse;
 
   abstract sendSms(request: SendSmsRequest): Promise<SendSmsResponse>;
 

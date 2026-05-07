@@ -5,10 +5,12 @@ import {
   IsObject,
   IsEnum,
   IsNumber,
+  IsBoolean,
+  IsIn,
   Min,
   Max,
-} from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+} from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 
 // ============================================
 // CALL DTOs
@@ -16,15 +18,15 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class InitiateCallDto {
   @ApiProperty({
-    description: 'ID of the lead to call',
-    example: '123e4567-e89b-12d3-a456-426614174000',
+    description: "ID of the lead to call",
+    example: "123e4567-e89b-12d3-a456-426614174000",
   })
   @IsUUID()
   leadId: string;
 
   @ApiPropertyOptional({
-    description: 'Additional metadata for the call',
-    example: { campaign: 'Q4-Sales', source: 'website' },
+    description: "Additional metadata for the call",
+    example: { campaign: "Q4-Sales", source: "website" },
   })
   @IsOptional()
   @IsObject()
@@ -32,13 +34,13 @@ export class InitiateCallDto {
 }
 
 export class CallResponseDto {
-  @ApiProperty({ description: 'Unique call identifier' })
+  @ApiProperty({ description: "Unique call identifier" })
   callId: string;
 
-  @ApiProperty({ description: 'Current call status' })
+  @ApiProperty({ description: "Current call status" })
   status: string;
 
-  @ApiPropertyOptional({ description: 'Provider call SID' })
+  @ApiPropertyOptional({ description: "Provider call SID" })
   providerCallSid?: string;
 }
 
@@ -47,7 +49,7 @@ export class CallDetailsDto {
   id: string;
 
   @ApiProperty()
-  direction: 'INBOUND' | 'OUTBOUND';
+  direction: "INBOUND" | "OUTBOUND";
 
   @ApiProperty()
   status: string;
@@ -141,23 +143,23 @@ export class WorkspaceUsageResponseDto {
 // ============================================
 
 export class ProvisionNumberDto {
-  @ApiPropertyOptional({ description: 'Area code for number', example: '415' })
+  @ApiPropertyOptional({ description: "Area code for number", example: "415" })
   @IsOptional()
   @IsString()
   areaCode?: string;
 
-  @ApiPropertyOptional({ description: 'Country code', example: 'US' })
+  @ApiPropertyOptional({ description: "Country code", example: "US" })
   @IsOptional()
   @IsString()
   country?: string;
 }
 
 export class AssignNumberDto {
-  @ApiProperty({ description: 'Phone number ID to assign' })
+  @ApiProperty({ description: "Phone number ID to assign" })
   @IsUUID()
   phoneNumberId: string;
 
-  @ApiProperty({ description: 'User ID to assign to' })
+  @ApiProperty({ description: "User ID to assign to" })
   @IsUUID()
   userId: string;
 }
@@ -192,7 +194,7 @@ export class PhoneNumberDto {
 
 export class UpdateCallingConfigDto {
   @ApiPropertyOptional({
-    description: 'Ring timeout in seconds',
+    description: "Ring timeout in seconds (SOW-mandated 20–30 range)",
     minimum: 20,
     maximum: 30,
   })
@@ -202,18 +204,55 @@ export class UpdateCallingConfigDto {
   @Max(30)
   ringTimeout?: number;
 
-  @ApiPropertyOptional({ description: 'Missed call SMS template' })
+  @ApiPropertyOptional({ description: "Missed call SMS template" })
   @IsOptional()
   @IsString()
   missedCallSmsTemplate?: string;
 
-  @ApiPropertyOptional({ description: 'Enable or disable calling' })
+  @ApiPropertyOptional({ description: "Enable or disable calling" })
   @IsOptional()
+  @IsBoolean()
   callingEnabled?: boolean;
 
-  @ApiPropertyOptional({ description: 'Enable or disable recording' })
+  @ApiPropertyOptional({ description: "Enable or disable recording" })
   @IsOptional()
+  @IsBoolean()
   recordingEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "Auto-charge overage instead of blocking when plan limit is reached. Client default = true.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  autoChargeOverage?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      "Telephony provider. This deployment is Telnyx-only — kept here for forward-compat.",
+    enum: ["telnyx"],
+  })
+  @IsOptional()
+  @IsIn(["telnyx"])
+  provider?: "telnyx";
+}
+
+export class UpdateUsageLimitsDto {
+  @ApiProperty({
+    description: "Monthly minute allowance for the plan",
+    example: 1000,
+  })
+  @IsNumber()
+  @Min(0)
+  planMinuteLimit: number;
+
+  @ApiProperty({
+    description: "Per-minute overage rate in dollars",
+    example: 0.02,
+  })
+  @IsNumber()
+  @Min(0)
+  overageRate: number;
 }
 
 export class CallingConfigurationDto {
@@ -316,8 +355,8 @@ export class GetCallsQueryDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsEnum(['INBOUND', 'OUTBOUND'])
-  direction?: 'INBOUND' | 'OUTBOUND';
+  @IsEnum(["INBOUND", "OUTBOUND"])
+  direction?: "INBOUND" | "OUTBOUND";
 
   @ApiPropertyOptional()
   @IsOptional()

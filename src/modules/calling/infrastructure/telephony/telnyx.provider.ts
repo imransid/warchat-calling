@@ -1,16 +1,15 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import axios, { AxiosInstance } from "axios";
 import {
   ITelephonyProvider,
   OutboundCallRequest,
   OutboundCallResponse,
-  InboundCallResponse,
   SendSmsRequest,
   SendSmsResponse,
   ProvisionNumberRequest,
   ProvisionNumberResponse,
-} from './telephony-provider.interface';
+} from "./telephony-provider.interface";
 
 /**
  * Telnyx provider — implements full Call Control + Messaging + Number Order flows.
@@ -32,16 +31,16 @@ export class TelnyxProvider implements ITelephonyProvider {
   private apiKey: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('TELNYX_API_KEY');
+    this.apiKey = this.configService.get<string>("TELNYX_API_KEY");
 
     if (!this.apiKey) {
-      this.logger.warn('Telnyx API key not configured');
+      this.logger.warn("Telnyx API key not configured");
     } else {
       this.client = axios.create({
-        baseURL: 'https://api.telnyx.com/v2',
+        baseURL: "https://api.telnyx.com/v2",
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         timeout: 15_000,
       });
@@ -59,8 +58,8 @@ export class TelnyxProvider implements ITelephonyProvider {
       `Initiating outbound call from ${request.from} to ${request.to}`,
     );
 
-    const response = await this.client.post('/calls', {
-      connection_id: this.configService.get<string>('TELNYX_CONNECTION_ID'),
+    const response = await this.client.post("/calls", {
+      connection_id: this.configService.get<string>("TELNYX_CONNECTION_ID"),
       to: request.to,
       from: request.from,
       webhook_url: request.callbackUrl,
@@ -80,7 +79,7 @@ export class TelnyxProvider implements ITelephonyProvider {
     return {
       sid: call.call_control_id,
       status: this.mapTelnyxStatus(call.state),
-      direction: 'outbound-api',
+      direction: "outbound-api",
     };
   }
 
@@ -105,7 +104,7 @@ export class TelnyxProvider implements ITelephonyProvider {
   async executeCallControl(
     callControlId: string,
     command: {
-      command: 'answer' | 'transfer' | 'hangup' | 'speak';
+      command: "answer" | "transfer" | "hangup" | "speak";
       to?: string;
       timeout_secs?: number;
       from?: string;
@@ -122,28 +121,13 @@ export class TelnyxProvider implements ITelephonyProvider {
     );
 
     try {
-      await this.client.post(
-        `/calls/${callControlId}/actions/${action}`,
-        body,
-      );
+      await this.client.post(`/calls/${callControlId}/actions/${action}`, body);
     } catch (error) {
       this.logger.error(
         `Call control ${action} failed for ${callControlId}: ${error.message}`,
       );
       throw error;
     }
-  }
-
-  /**
-   * Kept for interface compatibility, but unused for Telnyx — Telnyx is
-   * driven by executeCallControl() above, not by an XML response body.
-   */
-  generateInboundCallResponse(params: {
-    forwardTo: string;
-    timeout: number;
-    callbackUrl: string;
-  }): InboundCallResponse {
-    return { xml: JSON.stringify({ noop: true, ...params }) };
   }
 
   // ============================================
@@ -154,15 +138,15 @@ export class TelnyxProvider implements ITelephonyProvider {
     this.logger.debug(`Sending SMS from ${request.from} to ${request.to}`);
 
     const messagingProfileId = this.configService.get<string>(
-      'TELNYX_MESSAGING_PROFILE_ID',
+      "TELNYX_MESSAGING_PROFILE_ID",
     );
     if (!messagingProfileId) {
       throw new Error(
-        'TELNYX_MESSAGING_PROFILE_ID not set — missed-call SMS cannot be sent',
+        "TELNYX_MESSAGING_PROFILE_ID not set — missed-call SMS cannot be sent",
       );
     }
 
-    const response = await this.client.post('/messages', {
+    const response = await this.client.post("/messages", {
       from: request.from,
       to: request.to,
       text: request.body,
@@ -174,7 +158,7 @@ export class TelnyxProvider implements ITelephonyProvider {
 
     return {
       sid: message.id,
-      status: message.status || 'queued',
+      status: message.status || "queued",
     };
   }
 
@@ -194,32 +178,30 @@ export class TelnyxProvider implements ITelephonyProvider {
     request: ProvisionNumberRequest,
   ): Promise<ProvisionNumberResponse> {
     this.logger.debug(
-      `Provisioning number (areaCode=${request.areaCode}, country=${request.country || 'US'})`,
+      `Provisioning number (areaCode=${request.areaCode}, country=${request.country || "US"})`,
     );
 
     // Step 1 — search
-    const search = await this.client.get('/available_phone_numbers', {
+    const search = await this.client.get("/available_phone_numbers", {
       params: {
-        'filter[national_destination_code]': request.areaCode,
-        'filter[country_code]': request.country || 'US',
-        'filter[features][]': ['voice', 'sms'],
-        'filter[limit]': 5,
+        "filter[national_destination_code]": request.areaCode,
+        "filter[country_code]": request.country || "US",
+        "filter[features][]": ["voice", "sms"],
+        "filter[limit]": 5,
       },
     });
 
     const candidates: Array<{ phone_number: string }> = search.data.data || [];
     if (candidates.length === 0) {
-      throw new Error(
-        `No available numbers in area code ${request.areaCode}`,
-      );
+      throw new Error(`No available numbers in area code ${request.areaCode}`);
     }
 
     // Step 2 — order the first candidate
-    const order = await this.client.post('/number_orders', {
+    const order = await this.client.post("/number_orders", {
       phone_numbers: [{ phone_number: candidates[0].phone_number }],
-      connection_id: this.configService.get<string>('TELNYX_CONNECTION_ID'),
+      connection_id: this.configService.get<string>("TELNYX_CONNECTION_ID"),
       messaging_profile_id: this.configService.get<string>(
-        'TELNYX_MESSAGING_PROFILE_ID',
+        "TELNYX_MESSAGING_PROFILE_ID",
       ),
     });
 
@@ -227,7 +209,7 @@ export class TelnyxProvider implements ITelephonyProvider {
     const orderedNumber = ordered.phone_numbers?.[0];
 
     if (!orderedNumber) {
-      throw new Error('Number order succeeded but returned no phone number');
+      throw new Error("Number order succeeded but returned no phone number");
     }
 
     this.logger.log(`Number ordered: ${orderedNumber.phone_number}`);
@@ -277,24 +259,24 @@ export class TelnyxProvider implements ITelephonyProvider {
    * "call.hangup", with hangup_cause distinguishing busy/no-answer/failed.
    */
   private mapTelnyxStatus(input: string): string {
-    if (!input) return 'INITIATED';
+    if (!input) return "INITIATED";
     const v = input.toLowerCase();
 
     // Event types
-    if (v.includes('call.initiated')) return 'INITIATED';
-    if (v.includes('call.bridged')) return 'IN_PROGRESS';
-    if (v.includes('call.answered')) return 'ANSWERED';
-    if (v.includes('call.hangup')) return 'COMPLETED';
+    if (v.includes("call.initiated")) return "INITIATED";
+    if (v.includes("call.bridged")) return "IN_PROGRESS";
+    if (v.includes("call.answered")) return "ANSWERED";
+    if (v.includes("call.hangup")) return "COMPLETED";
 
     // Raw states
-    if (v === 'parked' || v === 'ringing') return 'RINGING';
-    if (v === 'bridged') return 'IN_PROGRESS';
-    if (v === 'answered') return 'ANSWERED';
-    if (v === 'busy') return 'BUSY';
-    if (v === 'no-answer' || v === 'no_answer') return 'NO_ANSWER';
-    if (v === 'failed') return 'FAILED';
-    if (v === 'completed' || v === 'hangup') return 'COMPLETED';
+    if (v === "parked" || v === "ringing") return "RINGING";
+    if (v === "bridged") return "IN_PROGRESS";
+    if (v === "answered") return "ANSWERED";
+    if (v === "busy") return "BUSY";
+    if (v === "no-answer" || v === "no_answer") return "NO_ANSWER";
+    if (v === "failed") return "FAILED";
+    if (v === "completed" || v === "hangup") return "COMPLETED";
 
-    return 'INITIATED';
+    return "INITIATED";
   }
 }

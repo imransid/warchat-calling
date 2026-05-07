@@ -41,7 +41,6 @@ import {
 
 // Infrastructure
 import { TelephonyProviderFactory } from "./infrastructure/telephony/telephony-provider.factory";
-import { TwilioProvider } from "./infrastructure/telephony/twilio.provider";
 import { TelnyxProvider } from "./infrastructure/telephony/telnyx.provider";
 
 // Webhook retry worker (NEW)
@@ -82,12 +81,7 @@ const QueryHandlers = [
 
 const Workers = [WebhookRetryScheduler, WebhookRetryProcessor];
 
-const Providers = [
-  PrismaService,
-  TelephonyProviderFactory,
-  TwilioProvider,
-  TelnyxProvider,
-];
+const Providers = [PrismaService, TelephonyProviderFactory, TelnyxProvider];
 
 @Module({
   imports: [

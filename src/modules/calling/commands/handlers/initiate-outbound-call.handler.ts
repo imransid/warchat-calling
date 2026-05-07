@@ -69,13 +69,8 @@ export class InitiateOutboundCallHandler
     const currentCycle = await this.getCurrentBillingCycle(workspaceId);
     const usageStats = await this.getUsageStats(workspaceId, currentCycle.id);
 
-    // Get workspace configuration
-    const wsConfig = await this.prisma.callingConfiguration.findUnique({
-      where: { workspaceId },
-    });
-
     // Check if auto-charge overage is enabled (client requirement)
-    if (!wsConfig?.autoChargeOverage && usageStats.totalMinutes >= currentCycle.planMinuteLimit) {
+    if (!config.autoChargeOverage && usageStats.totalMinutes >= currentCycle.planMinuteLimit) {
       throw new ForbiddenException(
         'Monthly calling limit exceeded. Please upgrade your plan or enable auto-charge overage.',
       );
@@ -111,11 +106,16 @@ export class InitiateOutboundCallHandler
     const provider = this.telephonyFactory.getProvider(config.provider);
 
     try {
-      // Agent-first dial flow: call agent first
+      // Agent-first dial flow: call agent first.
+      //
+      // When the agent answers, Telnyx fires call.answered on the status
+      // webhook. The webhook controller then issues a `transfer` action
+      // targeting the customer's number, which Telnyx bridges into the
+      // same call leg with the business number as caller ID.
       const callResponse = await provider.initiateOutboundCall({
         from: agent.assignedNumber.phoneNumber, // Business number
         to: agent.phoneNumber, // Agent's real phone first
-        callbackUrl: `${process.env.APP_URL}/webhooks/calling/${config.provider}/status`,
+        callbackUrl: `${process.env.APP_URL}/webhooks/calling/telnyx/status`,
         callbackMethod: 'POST',
         metadata: {
           callId: call.id,
@@ -127,13 +127,22 @@ export class InitiateOutboundCallHandler
         },
       });
 
-      // Update call with provider SID
+      // Update call with provider SID. We also stash the outbound stage and
+      // customer number in providerMetadata so the answer-bridge handler can
+      // resolve which leg is currently up without reading volatile metadata
+      // headers back from the provider.
       await this.prisma.call.update({
         where: { id: call.id },
         data: {
           providerCallSid: callResponse.sid,
           status: CallStatus.RINGING,
           ringingAt: new Date(),
+          providerMetadata: {
+            stage: 'DIALING_AGENT',
+            customerNumber: lead.phoneNumber,
+            agentPhoneNumber: agent.phoneNumber,
+            businessNumber: agent.assignedNumber.phoneNumber,
+          } as any,
         },
       });
 
