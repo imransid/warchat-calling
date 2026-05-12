@@ -201,7 +201,11 @@ export class GetCallsByLeadHandler implements IQueryHandler<GetCallsByLeadQuery>
   constructor(private readonly prisma: PrismaService) {}
 
   async execute(query: GetCallsByLeadQuery) {
-    const { leadId, limit = 50, offset = 0 } = query;
+    const { leadId } = query;
+    const limit = Number.isFinite(query.limit) ? Math.trunc(query.limit) : 50;
+    const offset = Number.isFinite(query.offset) ? Math.trunc(query.offset) : 0;
+    const take = limit > 0 ? limit : 50;
+    const skip = offset >= 0 ? offset : 0;
 
     const calls = await this.prisma.call.findMany({
       where: { leadId },
@@ -218,8 +222,8 @@ export class GetCallsByLeadHandler implements IQueryHandler<GetCallsByLeadQuery>
       orderBy: {
         createdAt: "desc",
       },
-      take: limit,
-      skip: offset,
+      take,
+      skip,
     });
 
     const total = await this.prisma.call.count({

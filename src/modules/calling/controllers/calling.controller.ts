@@ -10,6 +10,8 @@ import {
   HttpStatus,
   HttpCode,
   BadRequestException,
+  DefaultValuePipe,
+  ParseIntPipe,
 } from "@nestjs/common";
 import { JwtAuthGuard } from "@/modules/auth/jwt-auth.guard";
 import { PrismaService } from "@/shared/database/prisma.service";
@@ -180,15 +182,15 @@ export class CallingController {
   async getCallsByPhone(
     @Request() req: any,
     @Param("phoneNumber") phoneNumber: string,
-    @Query("limit") limit?: number,
-    @Query("offset") offset?: number,
+    @Query("limit", new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query("offset", new DefaultValuePipe(0), ParseIntPipe) offset: number,
   ) {
     const workspaceId = req.user.workspaceId;
     const lead = await this.prisma.lead.findFirst({
       where: { workspaceId, phoneNumber },
       select: { id: true },
     });
-    if (!lead) return { calls: [], total: 0, limit: limit ?? 50, offset: offset ?? 0 };
+    if (!lead) return { calls: [], total: 0, limit, offset };
     return this.queryBus.execute(
       new GetCallsByLeadQuery(lead.id, limit, offset),
     );
@@ -247,8 +249,8 @@ export class CallingController {
   })
   async getCallsByLead(
     @Param("leadId") leadId: string,
-    @Query("limit") limit?: number,
-    @Query("offset") offset?: number,
+    @Query("limit", new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query("offset", new DefaultValuePipe(0), ParseIntPipe) offset: number,
   ) {
     return this.queryBus.execute(
       new GetCallsByLeadQuery(leadId, limit, offset),
