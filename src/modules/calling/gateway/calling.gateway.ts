@@ -90,25 +90,28 @@ export class CallingGateway
         return;
       }
 
-      await this.userSync.ensure(payload.sub, payload.org_id);
+      const userId = String(payload.sub);
+      const workspaceId = String(payload.org_id);
+
+      await this.userSync.ensure(userId, workspaceId);
 
       client.data = {
-        userId: payload.sub,
-        workspaceId: payload.org_id,
+        userId,
+        workspaceId,
         role: payload.role || "Representative",
       };
 
-      client.join(`user:${payload.sub}`);
-      client.join(`workspace:${payload.org_id}`);
+      client.join(`user:${userId}`);
+      client.join(`workspace:${workspaceId}`);
 
-      const set = this.userSockets.get(payload.sub) ?? new Set<string>();
+      const set = this.userSockets.get(userId) ?? new Set<string>();
       set.add(client.id);
-      this.userSockets.set(payload.sub, set);
+      this.userSockets.set(userId, set);
 
       this.logger.debug(
-        `Socket connected: user=${payload.sub} socket=${client.id} (total=${set.size})`,
+        `Socket connected: user=${userId} socket=${client.id} (total=${set.size})`,
       );
-      client.emit("connected", { userId: payload.sub });
+      client.emit("connected", { userId });
     } catch (err) {
       this.logger.warn(`Socket handshake rejected: ${err.message}`);
       client.emit("auth_error", { message: "Invalid token" });

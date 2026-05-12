@@ -1,4 +1,9 @@
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PrismaService } from "@/shared/database/prisma.service";
 import { TelnyxProvider } from "../infrastructure/telephony/telnyx.provider";
@@ -27,40 +32,52 @@ export class WebRtcService {
   async getLoginToken(userId: string): Promise<WebRtcLoginToken> {
     let user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      throw new Error(`User ${userId} not found`);
+      throw new NotFoundException(`User ${userId} not found`);
     }
 
-    if (!user.telnyxCredentialId) {
-      const cred = await this.telnyx.createCredential({
-        name: `warmchats-agent-${userId}`,
-        tag: userId,
-      });
-      const sipDomain =
-        this.config.get<string>("TELNYX_SIP_DOMAIN") ||
-        "warmchats.sip.telnyx.com";
-      user = await this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          telnyxCredentialId: cred.id,
-          telnyxSipUri: `sip:${cred.sipUsername}@${sipDomain}`,
-        },
-      });
-      this.logger.log(`Provisioned SIP credential for user ${userId}`);
+    try {
+      if (!user.telnyxCredentialId) {
+        const cred = await this.telnyx.createCredential({
+          name: `warmchats-agent-${userId}`,
+          tag: userId,
+        });
+
+        const sipDomain =
+          this.config.get<string>("TELNYX_SIP_DOMAIN") ||
+          "warmchats.sip.telnyx.com";
+
+        user = await this.prisma.user.update({
+          where: { id: userId },
+          data: {
+            telnyxCredentialId: cred.id,
+            telnyxSipUri: `sip:${cred.sipUsername}@${sipDomain}`,
+          },
+        });
+        this.logger.log(`Provisioned SIP credential for user ${userId}`);
+      }
+
+      const loginToken = await this.telnyx.createOnDemandJwt(
+        user.telnyxCredentialId!,
+      );
+
+      // Telnyx on-demand tokens expire in ~1 hour. Frontend should refresh
+      // before expiry. We don't decode the JWT here — caller can if needed.
+      const expiresAt = new Date(Date.now() + 50 * 60 * 1000).toISOString();
+
+      return {
+        loginToken,
+        sipUri: user.telnyxSipUri!,
+        expiresAt,
+      };
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Telnyx WebRTC login token could not be issued";
+
+      this.logger.error(`WebRTC token error for user ${userId}: ${message}`);
+      throw new ServiceUnavailableException(message);
     }
-
-    const loginToken = await this.telnyx.createOnDemandJwt(
-      user.telnyxCredentialId!,
-    );
-
-    // Telnyx on-demand tokens expire in ~1 hour. Frontend should refresh
-    // before expiry. We don't decode the JWT here — caller can if needed.
-    const expiresAt = new Date(Date.now() + 50 * 60 * 1000).toISOString();
-
-    return {
-      loginToken,
-      sipUri: user.telnyxSipUri!,
-      expiresAt,
-    };
   }
 
   /**

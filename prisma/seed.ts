@@ -5,16 +5,32 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("🌱 Seeding database...\n");
 
+  const workspaceId = process.env.SEED_WORKSPACE_ID || "workspace-id";
+  const userId = process.env.SEED_USER_ID || "agent-id";
+  const agentEmail =
+    process.env.SEED_AGENT_EMAIL || `seed-agent-${userId}@warmchats.local`;
+  const agentName = process.env.SEED_AGENT_NAME || "Test Agent";
+  const agentPhoneNumber =
+    process.env.SEED_AGENT_PHONE_NUMBER || "+18801234567890";
+  const businessPhoneNumber =
+    process.env.SEED_BUSINESS_PHONE_NUMBER || "+15593839632";
+  const leadId = process.env.SEED_LEAD_ID || "lead-id";
+  const leadPhoneNumber =
+    process.env.SEED_LEAD_PHONE_NUMBER || "+18809876543210";
+  const leadName = process.env.SEED_LEAD_NAME || "Test Customer";
+  const leadEmail =
+    process.env.SEED_LEAD_EMAIL || `seed-lead-${leadId}@example.com`;
+
   // ============================================
   // 1. CREATE WORKSPACE
   // ============================================
   console.log("Creating workspace...");
   const workspace = await prisma.workspace.upsert({
-    where: { id: "workspace-id" },
+    where: { id: workspaceId },
     update: {},
     create: {
-      id: "workspace-id",
-      name: "WarmChats Test Workspace",
+      id: workspaceId,
+      name: `WarmChats Test Workspace (${workspaceId})`,
     },
   });
   console.log("✅ Workspace created:", workspace.id);
@@ -24,31 +40,36 @@ async function main() {
   // ============================================
   console.log("\nCreating test agent...");
   const agent = await prisma.user.upsert({
-    where: { email: "agent@warmchats.com" },
-    update: {},
+    where: { id: userId },
+    update: {
+      workspaceId: workspace.id,
+      email: agentEmail,
+      name: agentName,
+      phoneNumber: agentPhoneNumber,
+    },
     create: {
-      id: "agent-id",
-      email: "agent@warmchats.com",
-      name: "Test Agent",
-      phoneNumber: "+18801234567890", // ⚠️ REPLACE WITH YOUR REAL PHONE NUMBER
+      id: userId,
+      email: agentEmail,
+      name: agentName,
+      phoneNumber: agentPhoneNumber,
       workspaceId: workspace.id,
     },
   });
   console.log("✅ Agent created:", agent.id);
-  console.log("   ⚠️  Update phoneNumber with YOUR real phone for testing!");
+  console.log("   Agent phone:", agent.phoneNumber);
 
   // ============================================
   // 3. CREATE TEST LEAD (CUSTOMER)
   // ============================================
   console.log("\nCreating test lead...");
   const lead = await prisma.lead.upsert({
-    where: { id: "lead-id" },
+    where: { id: leadId },
     update: {},
     create: {
-      id: "lead-id",
-      name: "Test Customer",
-      phoneNumber: "+18809876543210", // ⚠️ REPLACE WITH ANOTHER PHONE FOR TESTING
-      email: "customer@example.com",
+      id: leadId,
+      name: leadName,
+      phoneNumber: leadPhoneNumber,
+      email: leadEmail,
       workspaceId: workspace.id,
     },
   });
@@ -59,12 +80,12 @@ async function main() {
   // ============================================
   console.log("\nCreating phone number...");
   const phoneNumber = await prisma.phoneNumber.upsert({
-    where: { phoneNumber: "+15593839632" }, // Your Telnyx number
+    where: { phoneNumber: businessPhoneNumber },
     update: {},
     create: {
-      phoneNumber: "+15593839632", // ⚠️ Use your actual Telnyx number
+      phoneNumber: businessPhoneNumber,
       provider: "telnyx",
-      providerSid: "telnyx-number-sid", // From Telnyx
+      providerSid: `seed:${businessPhoneNumber}`,
       status: "ACTIVE",
       capabilities: {
         voice: true,
@@ -125,16 +146,22 @@ async function main() {
     59,
   );
 
-  const billingCycle = await prisma.billingCycle.create({
-    data: {
-      workspaceId: workspace.id,
-      startDate,
-      endDate,
-      status: "ACTIVE",
-      planMinuteLimit: 1000,
-      overageRate: 0.02,
-    },
+  const existingCycle = await prisma.billingCycle.findFirst({
+    where: { workspaceId: workspace.id, startDate, endDate, status: "ACTIVE" },
   });
+
+  const billingCycle =
+    existingCycle ||
+    (await prisma.billingCycle.create({
+      data: {
+        workspaceId: workspace.id,
+        startDate,
+        endDate,
+        status: "ACTIVE",
+        planMinuteLimit: 1000,
+        overageRate: 0.02,
+      },
+    }));
   console.log("✅ Billing cycle created");
   console.log("   Plan Limit: 1000 minutes");
   console.log("   Overage Rate: $0.02/min");

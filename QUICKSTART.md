@@ -34,7 +34,8 @@ TELNYX_MESSAGING_PROFILE_ID=YOUR_PROFILE_ID
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-JWT_SECRET=your_secret_key_here
+# MUST match the Flask main API's JWT_SECRET_KEY
+JWT_SECRET_KEY=your_secret_key_here
 ```
 
 ## Step 3: Setup Database

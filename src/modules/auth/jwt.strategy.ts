@@ -5,8 +5,8 @@ import { ExtractJwt, Strategy } from "passport-jwt";
 import { UserSyncService } from "./user-sync.service";
 
 export interface JwtPayload {
-  sub: string;
-  org_id: string;
+  sub: string | number;
+  org_id: string | number;
   role?: string;
   session_id?: string;
   type?: string;
@@ -47,15 +47,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (payload.type && payload.type !== "access") {
       throw new UnauthorizedException("Refresh tokens cannot be used here");
     }
-    if (!payload.sub || !payload.org_id) {
+    if (payload.sub == null || payload.org_id == null) {
       throw new UnauthorizedException("Token missing sub or org_id claim");
     }
 
-    await this.userSync.ensure(payload.sub, payload.org_id);
+    const userId = String(payload.sub);
+    const workspaceId = String(payload.org_id);
+
+    await this.userSync.ensure(userId, workspaceId);
 
     return {
-      id: payload.sub,
-      workspaceId: payload.org_id,
+      id: userId,
+      workspaceId,
       role: payload.role || "Representative",
       sessionId: payload.session_id,
     };
