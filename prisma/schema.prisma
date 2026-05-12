@@ -1,6 +1,7 @@
 // Prisma Schema for WarmChats Calling Module
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -100,9 +101,9 @@ model Call {
   completedAt DateTime?
 
   // Parallel-ring leg tracking (web + cell fork)
-  webLegSid    String? // call_control_id of the SIP/web leg
-  phoneLegSid  String? // call_control_id of the PSTN/cell leg
-  answeredVia  String? // 'web' | 'phone' — whichever leg picked up first
+  webLegSid   String? // call_control_id of the SIP/web leg
+  phoneLegSid String? // call_control_id of the PSTN/cell leg
+  answeredVia String? // 'web' | 'phone' — whichever leg picked up first
 
   // Outbound origin: 'web' (browser SDK) or 'phone' (agent-first PSTN)
   origin String? @default("phone")

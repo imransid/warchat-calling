@@ -1,15 +1,23 @@
 # ==================================================
 #  Build Stage
 # ==================================================
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
+
+# Prisma needs libssl3 + ca-certs at install/generate time on Debian slim.
+# These come pre-installed on most slim images, but pin them explicitly so
+# the build is reproducible across base-image updates.
+RUN apt-get update -qq && \
+  apt-get install -y --no-install-recommends openssl ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
 
 # Install all deps (incl. dev) — needed for nest build + prisma generate.
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-# Generate Prisma client.
+# Generate Prisma client. Done after deps but before app source so this
+# layer caches when only src/ changes.
 COPY prisma ./prisma/
 RUN npx prisma generate
 
@@ -18,33 +26,43 @@ COPY tsconfig*.json nest-cli.json ./
 COPY src ./src
 RUN npm run build
 
-# Re-install with only production deps in a sibling dir so we can copy a
-# slim node_modules into the final stage. Using a separate dir avoids
-# wiping the prisma client we just generated.
-RUN cp -r node_modules /tmp/node_modules_all && \
-  npm prune --omit=dev
+# Prune dev deps in place. `npm prune --omit=dev` removes dev-only packages
+# but preserves the prisma client files at node_modules/.prisma/* and
+# node_modules/@prisma/* generated above — those live alongside the runtime
+# @prisma/client package and survive pruning.
+RUN npm prune --omit=dev
 
 
 # ==================================================
 #  Production Stage
 # ==================================================
-FROM node:20-alpine AS production
+FROM node:20-slim AS production
 
 WORKDIR /app
 ENV NODE_ENV=production
 
+# Same runtime libs Prisma needs to talk to its query engine binary.
+# Without libssl3 the engine starts but can't load and returns the
+# non-JSON "Error loading..." message you saw on alpine.
+RUN apt-get update -qq && \
+  apt-get install -y --no-install-recommends openssl ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
 # Built artifacts.
 COPY --from=builder /app/dist ./dist
 
-# Prisma needs schema files at runtime for `migrate deploy`.
+# Prisma needs schema + migration files at runtime for `migrate deploy`.
 COPY --from=builder /app/prisma ./prisma
 
-# package.json so `node` can resolve `"type"`, scripts, etc.
+# package.json so node can resolve "main", scripts, and module fields.
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/package-lock.json ./
 
-# Slim, pruned node_modules — keeps the generated prisma client (it lives
-# under node_modules/.prisma and node_modules/@prisma).
+# Pruned node_modules — keeps the generated prisma client.
 COPY --from=builder /app/node_modules ./node_modules
+
+# Drop root for runtime.
+USER node
 
 EXPOSE 3000
 
