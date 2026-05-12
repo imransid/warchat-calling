@@ -50,6 +50,11 @@ import {
   WEBHOOK_RETRY_QUEUE_NAME,
 } from "./workers/webhook-retry.worker";
 
+// WebRTC + realtime gateway
+import { WebRtcController } from "./webrtc/webrtc.controller";
+import { WebRtcService } from "./webrtc/webrtc.service";
+import { CallingGateway } from "./gateway/calling.gateway";
+
 // Shared
 import { PrismaService } from "@/shared/database/prisma.service";
 
@@ -81,7 +86,13 @@ const QueryHandlers = [
 
 const Workers = [WebhookRetryScheduler, WebhookRetryProcessor];
 
-const Providers = [PrismaService, TelephonyProviderFactory, TelnyxProvider];
+const Providers = [
+  PrismaService,
+  TelephonyProviderFactory,
+  TelnyxProvider,
+  WebRtcService,
+  CallingGateway,
+];
 
 @Module({
   imports: [
@@ -97,8 +108,9 @@ const Providers = [PrismaService, TelephonyProviderFactory, TelnyxProvider];
     CallingController,
     CallingWebhookController,
     CallingAdminController,
+    WebRtcController,
   ],
   providers: [...CommandHandlers, ...QueryHandlers, ...Workers, ...Providers],
-  exports: [TelephonyProviderFactory],
+  exports: [TelephonyProviderFactory, CallingGateway],
 })
 export class CallingModule {}

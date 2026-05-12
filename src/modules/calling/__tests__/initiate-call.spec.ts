@@ -76,9 +76,9 @@ describe("InitiateOutboundCallHandler", () => {
 
   describe("execute", () => {
     const validCommand = new InitiateOutboundCallCommand(
-      "lead-123",
       "agent-456",
       "workspace-789",
+      { leadId: "lead-123", origin: "phone" },
     );
 
     const mockAgent = {

@@ -17,12 +17,40 @@ import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 // ============================================
 
 export class InitiateCallDto {
-  @ApiProperty({
-    description: "ID of the lead to call",
+  @ApiPropertyOptional({
+    description:
+      "Existing lead UUID. Either leadId or phoneNumber must be provided.",
     example: "123e4567-e89b-12d3-a456-426614174000",
   })
+  @IsOptional()
   @IsUUID()
-  leadId: string;
+  leadId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "E.164 phone number to call. When provided without leadId, the lead is upserted by (workspaceId, phoneNumber).",
+    example: "+14155551234",
+  })
+  @IsOptional()
+  @IsString()
+  phoneNumber?: string;
+
+  @ApiPropertyOptional({
+    description: "Optional lead name to record on upsert.",
+  })
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Where the call originates. 'phone' = legacy agent-first PSTN dial; 'web' = the browser places the call via Telnyx WebRTC.",
+    enum: ["phone", "web"],
+    default: "phone",
+  })
+  @IsOptional()
+  @IsIn(["phone", "web"])
+  origin?: "phone" | "web";
 
   @ApiPropertyOptional({
     description: "Additional metadata for the call",
@@ -155,10 +183,6 @@ export class ProvisionNumberDto {
 }
 
 export class AssignNumberDto {
-  @ApiProperty({ description: "Phone number ID to assign" })
-  @IsUUID()
-  phoneNumberId: string;
-
   @ApiProperty({ description: "User ID to assign to" })
   @IsUUID()
   userId: string;
@@ -208,6 +232,15 @@ export class UpdateCallingConfigDto {
   @IsOptional()
   @IsString()
   missedCallSmsTemplate?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Inbound ring strategy: 'parallel' (ring web + cell at once), 'web_first' (ring browser then cell), 'phone_first' (ring cell then browser).",
+    enum: ["parallel", "web_first", "phone_first"],
+  })
+  @IsOptional()
+  @IsIn(["parallel", "web_first", "phone_first"])
+  ringStrategy?: "parallel" | "web_first" | "phone_first";
 
   @ApiPropertyOptional({ description: "Enable or disable calling" })
   @IsOptional()

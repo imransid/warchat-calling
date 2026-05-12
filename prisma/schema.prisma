@@ -99,6 +99,14 @@ model Call {
   answeredAt  DateTime?
   completedAt DateTime?
 
+  // Parallel-ring leg tracking (web + cell fork)
+  webLegSid    String? // call_control_id of the SIP/web leg
+  phoneLegSid  String? // call_control_id of the PSTN/cell leg
+  answeredVia  String? // 'web' | 'phone' — whichever leg picked up first
+
+  // Outbound origin: 'web' (browser SDK) or 'phone' (agent-first PSTN)
+  origin String? @default("phone")
+
   // Metadata
   providerMetadata Json? // Raw provider webhook data
   errorMessage     String?
@@ -137,6 +145,13 @@ enum CallEventType {
   CALL_BUSY
   CALL_CANCELED
   MISSED_CALL_SMS_SENT
+  // Parallel-ring + call-waiting events
+  WEB_LEG_RINGING
+  PHONE_LEG_RINGING
+  ANSWERED_ON_WEB
+  ANSWERED_ON_PHONE
+  LOSER_LEG_CANCELED
+  BUSY_AGENT_OCCUPIED
 }
 
 model CallEvent {
@@ -228,6 +243,8 @@ model CallingConfiguration {
   // Inbound Settings
   ringTimeout           Int    @default(25) // Seconds - Client requirement: 25 seconds
   missedCallSmsTemplate String @default("Currently in an appointment. I will call you back shortly or text me please.") // Client's exact template
+  // 'parallel' (web + cell simultaneously), 'web_first', 'phone_first'
+  ringStrategy          String @default("parallel")
 
   // Provider Settings
   provider           String @default("telnyx") // Client uses Telnyx only
@@ -317,9 +334,17 @@ model Workspace {
 
 model User {
   id          String  @id @default(uuid())
-  email       String  @unique
-  name        String
-  phoneNumber String? // Agent's real phone number
+  // email/name are nullable because the calling backend lazily upserts User
+  // rows from JWT claims (sub + org_id only) — the Flask main API is the
+  // system-of-record for these fields.
+  email       String? @unique
+  name        String?
+  phoneNumber String? // Agent's real phone number (for cell-phone leg of parallel ring)
+
+  // Telnyx SIP Credential used by @telnyx/webrtc in the browser. Created
+  // on-demand when the agent first requests a WebRTC login token.
+  telnyxCredentialId String? @unique
+  telnyxSipUri       String? // e.g. sip:agent-uuid@warmchats.sip.telnyx.com
 
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id])

@@ -13,6 +13,7 @@ import {
 import { PrismaService } from "@/shared/database/prisma.service";
 import { TelephonyProviderFactory } from "@/modules/calling/infrastructure/telephony/telephony-provider.factory";
 import { CallCompletedEvent, MissedCallEvent } from "../../events/impl";
+import { CallingGateway } from "../../gateway/calling.gateway";
 import { CallStatus } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/library";
 
@@ -26,6 +27,7 @@ export class CompleteCallHandler implements ICommandHandler<CompleteCallCommand>
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBus,
     private readonly commandBus: CommandBus,
+    private readonly gateway: CallingGateway,
   ) {}
 
   async execute(command: CompleteCallCommand): Promise<void> {
@@ -113,6 +115,15 @@ export class CompleteCallHandler implements ICommandHandler<CompleteCallCommand>
         call.workspaceId,
       ),
     );
+
+    this.gateway.emitToUser(call.agentId, "call_state", {
+      callId,
+      status,
+      duration,
+      answeredVia: call.answeredVia,
+      direction: call.direction,
+      terminal: true,
+    });
   }
 
   private async getCurrentBillingCycle(workspaceId: string) {

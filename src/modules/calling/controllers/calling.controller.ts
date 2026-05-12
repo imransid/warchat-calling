@@ -11,6 +11,8 @@ import {
   HttpCode,
   BadRequestException,
 } from "@nestjs/common";
+import { JwtAuthGuard } from "@/modules/auth/jwt-auth.guard";
+import { PrismaService } from "@/shared/database/prisma.service";
 import { CommandBus, QueryBus } from "@nestjs/cqrs";
 import {
   ApiTags,
@@ -41,12 +43,13 @@ import {
 
 @ApiTags("calling")
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
 @Controller("calling")
-// @UseGuards(JwtAuthGuard) // Add your auth guard
 export class CallingController {
   constructor(
     private readonly commandBus: CommandBus,
     private readonly queryBus: QueryBus,
+    private readonly prisma: PrismaService,
   ) {}
 
   // ============================================
@@ -118,14 +121,20 @@ export class CallingController {
       );
     }
 
-    // Initiate the call
+    if (!dto.leadId && !dto.phoneNumber) {
+      throw new BadRequestException(
+        "Either leadId or phoneNumber must be provided",
+      );
+    }
+
     const callId = await this.commandBus.execute(
-      new InitiateOutboundCallCommand(
-        dto.leadId,
-        userId,
-        workspaceId,
-        dto.metadata,
-      ),
+      new InitiateOutboundCallCommand(userId, workspaceId, {
+        leadId: dto.leadId,
+        phoneNumber: dto.phoneNumber,
+        name: dto.name,
+        origin: dto.origin,
+        metadata: dto.metadata,
+      }),
     );
 
     return {
@@ -160,6 +169,29 @@ export class CallingController {
   })
   async getCallById(@Param("callId") callId: string) {
     return this.queryBus.execute(new GetCallByIdQuery(callId));
+  }
+
+  @Get("calls/by-phone/:phoneNumber")
+  @ApiOperation({
+    summary: "Get calls for a phone number",
+    description:
+      "Looks up the Lead within the current workspace by phoneNumber and returns its call history. Useful when the frontend tracks contacts by phone rather than by the calling backend's Lead UUID.",
+  })
+  async getCallsByPhone(
+    @Request() req: any,
+    @Param("phoneNumber") phoneNumber: string,
+    @Query("limit") limit?: number,
+    @Query("offset") offset?: number,
+  ) {
+    const workspaceId = req.user.workspaceId;
+    const lead = await this.prisma.lead.findFirst({
+      where: { workspaceId, phoneNumber },
+      select: { id: true },
+    });
+    if (!lead) return { calls: [], total: 0, limit: limit ?? 50, offset: offset ?? 0 };
+    return this.queryBus.execute(
+      new GetCallsByLeadQuery(lead.id, limit, offset),
+    );
   }
 
   @Get("leads/:leadId/calls")

@@ -1,5 +1,6 @@
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
+import { IoAdapter } from "@nestjs/platform-socket.io";
 import { AppModule } from "./app.module";
 import { SwaggerConfig } from "./config/swagger.config";
 import compression = require("compression");
@@ -8,18 +9,32 @@ import helmet from "helmet";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ["error", "warn", "log", "debug", "verbose"],
+    // rawBody is needed by the Telnyx webhook signature verifier — Telnyx
+    // signs `${timestamp}|${rawBody}` with Ed25519.
+    rawBody: true,
   });
 
   // ============================================
   // SECURITY
   // ============================================
 
+// CORS
   app.enableCors({
-    origin: process.env.CORS_ORIGIN?.split(",") || "*",
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Accept',
+      'Origin',
+      'X-Requested-With',
+    ],
+    credentials: false,
+    exposedHeaders: ['Authorization'],
   });
+
+  // Socket.IO adapter — used by CallingGateway for real-time call signaling.
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   app.use(
     helmet({
@@ -34,18 +49,23 @@ async function bootstrap() {
   app.use(compression());
 
   // ============================================
-  // TEST AUTH MIDDLEWARE (FOR DEVELOPMENT)
+  // TEST AUTH MIDDLEWARE (DEV ONLY)
   // ============================================
-  // This injects a fake user for testing without real auth
-  // REMOVE OR REPLACE WITH REAL JWT AUTH IN PRODUCTION!
+  // Real JWT verification is wired via JwtAuthGuard + JwtStrategy.
+  // The test-auth middleware below is *off by default* — enable only by
+  // setting USE_TEST_AUTH=true alongside NODE_ENV != production, so engineers
+  // testing the calling APIs without spinning up the Flask auth server can do
+  // so explicitly. Production deployments must never set this.
 
-  if (process.env.NODE_ENV !== "production") {
-    app.use((req: any, res: any, next: any) => {
+  if (
+    process.env.NODE_ENV !== "production" &&
+    process.env.USE_TEST_AUTH === "true"
+  ) {
+    app.use((req: any, _res: any, next: any) => {
       req.user = {
-        id: "agent-id",
-        email: "agent@warmchats.com",
-        name: "Test Agent",
-        workspaceId: "workspace-id",
+        id: process.env.TEST_USER_ID || "agent-id",
+        workspaceId: process.env.TEST_WORKSPACE_ID || "workspace-id",
+        role: process.env.TEST_USER_ROLE || "Owner",
       };
       next();
     });

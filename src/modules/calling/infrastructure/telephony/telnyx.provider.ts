@@ -227,6 +227,137 @@ export class TelnyxProvider implements ITelephonyProvider {
   }
 
   // ============================================
+  // WEBRTC — SIP CREDENTIALS + LOGIN TOKENS
+  // ============================================
+
+  /**
+   * Provision a Telnyx SIP credential (a "telephony credential") for an
+   * agent. The browser's @telnyx/webrtc client logs in with a short-lived
+   * JWT minted from this credential (see createOnDemandJwt).
+   *
+   * The credential is owned by a Credential Connection — one shared
+   * connection per workspace is fine. We tag the credential with the agent
+   * UUID in `tag` so we can map it back.
+   */
+  async createCredential(params: {
+    name: string;
+    tag?: string;
+  }): Promise<{ id: string; sipUsername: string }> {
+    const connectionId = this.configService.get<string>(
+      "TELNYX_CREDENTIAL_CONNECTION_ID",
+    );
+    if (!connectionId) {
+      throw new Error("TELNYX_CREDENTIAL_CONNECTION_ID is not configured");
+    }
+
+    const response = await this.client.post("/telephony_credentials", {
+      connection_id: connectionId,
+      name: params.name,
+      tag: params.tag,
+    });
+
+    const cred = response.data.data;
+    this.logger.log(
+      `Created Telnyx telephony credential ${cred.id} (sip_username=${cred.sip_username})`,
+    );
+    return { id: cred.id, sipUsername: cred.sip_username };
+  }
+
+  async deleteCredential(credentialId: string): Promise<void> {
+    try {
+      await this.client.delete(`/telephony_credentials/${credentialId}`);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to delete telephony credential ${credentialId}: ${error.message}`,
+      );
+    }
+  }
+
+  /**
+   * Mint a short-lived (≤ 1 hr) JWT that the @telnyx/webrtc SDK uses to
+   * register the browser as a SIP endpoint. The endpoint returns a plain
+   * text JWT, not JSON.
+   */
+  async createOnDemandJwt(credentialId: string): Promise<string> {
+    const response = await this.client.post(
+      `/telephony_credentials/${credentialId}/token`,
+      {},
+      { responseType: "text", transformResponse: (v) => v },
+    );
+    return (response.data as string).trim();
+  }
+
+  // ============================================
+  // PARALLEL-RING FORK
+  // ============================================
+
+  /**
+   * Dial an outbound leg as part of a fork. The inbound anchor leg
+   * (`anchorCallControlId`) is already answered; this places a new outbound
+   * call. When that leg's call.answered webhook arrives, the webhook
+   * controller bridges it to the anchor and hangs up the loser.
+   *
+   * We pass `client_state` so the webhook handler can tell parallel-ring
+   * legs apart from other outbound calls.
+   */
+  async dialForkLeg(params: {
+    from: string;
+    to: string;
+    connectionId: string;
+    anchorCallControlId: string;
+    timeoutSecs: number;
+    leg: "web" | "phone";
+    callId: string;
+  }): Promise<string> {
+    const clientState = Buffer.from(
+      JSON.stringify({
+        kind: "fork_leg",
+        leg: params.leg,
+        anchor: params.anchorCallControlId,
+        callId: params.callId,
+      }),
+    ).toString("base64");
+
+    const response = await this.client.post("/calls", {
+      connection_id: params.connectionId,
+      to: params.to,
+      from: params.from,
+      timeout_secs: params.timeoutSecs,
+      webhook_url: `${this.configService.get<string>("APP_URL")}/webhooks/calling/telnyx/status`,
+      client_state: clientState,
+    });
+    return response.data.data.call_control_id;
+  }
+
+  /**
+   * Bridge two legs that are both already up (e.g. the inbound anchor and
+   * the winning outbound fork leg).
+   */
+  async bridge(
+    anchorCallControlId: string,
+    targetCallControlId: string,
+  ): Promise<void> {
+    await this.client.post(`/calls/${anchorCallControlId}/actions/bridge`, {
+      call_control_id: targetCallControlId,
+    });
+  }
+
+  /**
+   * Hang up a specific call leg. Used to cancel the losing fork leg as soon
+   * as the winner is identified.
+   */
+  async hangup(callControlId: string): Promise<void> {
+    try {
+      await this.client.post(`/calls/${callControlId}/actions/hangup`, {});
+    } catch (error) {
+      // Already hung up / canceled — non-fatal.
+      this.logger.debug(
+        `hangup on ${callControlId} ignored: ${error.message}`,
+      );
+    }
+  }
+
+  // ============================================
   // WEBHOOK PARSING
   // ============================================
 

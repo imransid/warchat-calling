@@ -8,10 +8,15 @@ import {
   Param,
   Query,
   Request,
+  UseGuards,
   HttpCode,
   HttpStatus,
   NotFoundException,
 } from "@nestjs/common";
+import { JwtAuthGuard } from "@/modules/auth/jwt-auth.guard";
+import { RolesGuard } from "@/modules/auth/roles.guard";
+import { Roles } from "@/modules/auth/roles.decorator";
+import { CallingGateway } from "../gateway/calling.gateway";
 import { CommandBus, QueryBus } from "@nestjs/cqrs";
 import {
   ApiTags,
@@ -57,12 +62,15 @@ import { PrismaService } from "@/shared/database/prisma.service";
  */
 @ApiTags("admin")
 @ApiBearerAuth()
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles("Owner", "Manager")
 @Controller("admin/calling")
 export class CallingAdminController {
   constructor(
     private readonly commandBus: CommandBus,
     private readonly queryBus: QueryBus,
     private readonly prisma: PrismaService,
+    private readonly gateway: CallingGateway,
   ) {}
 
   // ============================================
@@ -211,6 +219,7 @@ export class CallingAdminController {
     if (dto.autoChargeOverage !== undefined)
       data.autoChargeOverage = dto.autoChargeOverage;
     if (dto.provider !== undefined) data.provider = dto.provider;
+    if (dto.ringStrategy !== undefined) data.ringStrategy = dto.ringStrategy;
 
     const updated = await this.prisma.callingConfiguration.update({
       where: { workspaceId },
@@ -223,12 +232,44 @@ export class CallingAdminController {
       workspaceId: updated.workspaceId,
       provider: updated.provider,
       ringTimeout: updated.ringTimeout,
+      ringStrategy: updated.ringStrategy,
       missedCallSmsTemplate: updated.missedCallSmsTemplate,
       callingEnabled: updated.callingEnabled,
       recordingEnabled: updated.recordingEnabled,
       autoChargeOverage: updated.autoChargeOverage,
       updatedAt: updated.updatedAt,
     };
+  }
+
+  /**
+   * Per-agent web-call readiness for the admin agents page.
+   * Includes whether the agent has provisioned a SIP credential and whether
+   * any of their browser sessions are currently connected to the gateway.
+   */
+  @Get("agents/web-status")
+  @ApiOperation({
+    summary: "Get per-agent WebRTC + online status",
+    description:
+      "Lists agents in the workspace with their SIP credential status and whether any of their browser sessions are currently connected.",
+  })
+  async getAgentWebStatus(@Request() req: any) {
+    const workspaceId = req.user.workspaceId;
+    const agents = await this.prisma.user.findMany({
+      where: { workspaceId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phoneNumber: true,
+        telnyxCredentialId: true,
+        telnyxSipUri: true,
+      },
+    });
+    return agents.map((a) => ({
+      ...a,
+      hasCredential: !!a.telnyxCredentialId,
+      online: this.gateway.isUserOnline(a.id),
+    }));
   }
 
   // ============================================

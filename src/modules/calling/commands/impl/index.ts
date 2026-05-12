@@ -6,10 +6,15 @@ import { ICommand } from "@nestjs/cqrs";
 
 export class InitiateOutboundCallCommand implements ICommand {
   constructor(
-    public readonly leadId: string,
     public readonly agentId: string,
     public readonly workspaceId: string,
-    public readonly metadata?: Record<string, any>,
+    public readonly options: {
+      leadId?: string;
+      phoneNumber?: string;
+      name?: string;
+      origin?: "phone" | "web";
+      metadata?: Record<string, any>;
+    },
   ) {}
 }
 
