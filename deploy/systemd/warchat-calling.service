@@ -1,0 +1,60 @@
+# =====================================================================
+#  WarmChats Calling — systemd unit
+# =====================================================================
+#
+# Install:
+#   sudo cp deploy/systemd/warchat-calling.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now warchat-calling
+#
+# Inspect:
+#   sudo systemctl status warchat-calling
+#   sudo journalctl -u warchat-calling -f
+#
+# Edit paths below if your install layout differs.
+
+[Unit]
+Description=WarmChats Calling Backend (NestJS)
+Documentation=https://github.com/warmchats/warchat-calling
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+
+# Run as a dedicated user, not root. Create with:
+#   sudo adduser --system --group --home /opt/warchat-calling warchat
+User=warchat
+Group=warchat
+
+# App lives in /opt/warchat-calling — adjust if you keep yours elsewhere.
+WorkingDirectory=/opt/warchat-calling
+
+# Production env. Put real secrets here (chmod 600).
+EnvironmentFile=/opt/warchat-calling/.env
+
+# Use the built dist, not nest start.
+ExecStart=/usr/bin/node /opt/warchat-calling/dist/main.js
+
+Restart=always
+RestartSec=5
+StartLimitBurst=10
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/warchat-calling
+
+# Log to journald
+StandardOutput=journal
+StandardError=journal
+
+# Avoid OOM-killing other services if Node leaks.
+MemoryMax=2G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target
