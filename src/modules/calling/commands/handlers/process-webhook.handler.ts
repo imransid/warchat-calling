@@ -175,6 +175,11 @@ export class ProcessWebhookHandler
     const internalStatus = this.mapToInternalStatus(status);
 
     switch (internalStatus) {
+      case 'INITIATED':
+        // Row + RINGING are usually set in registerWebOriginCall on
+        // call.initiated; nothing else to do here.
+        break;
+
       case 'RINGING':
         await this.prisma.call.update({
           where: { id: callId },

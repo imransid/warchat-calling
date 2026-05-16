@@ -88,13 +88,14 @@ export class CallingWebhookController {
         await this.routeInboundTelnyxCall(payload);
       }
 
-      // 2. Outbound SIP-originated call (web origin) → register the call row
-      //    so the rest of the lifecycle can attach.
+      // 2. Outbound WebRTC call (web origin) → bind Telnyx call_control_id to
+      //    our placeholder row. `from` may be a SIP URI or the business number
+      //    when Caller ID Override is set on the credential connection.
       if (
         eventType === "call.initiated" &&
         payload.direction === "outgoing" &&
         callControlId &&
-        this.looksLikeSipFrom(payload.from)
+        (await this.shouldRegisterWebOriginCall(payload))
       ) {
         await this.registerWebOriginCall(payload, callControlId);
       }
@@ -398,24 +399,26 @@ export class CallingWebhookController {
     });
     if (existing) return;
 
-    const fromSip: string = payload.from;
+    const fromRaw: string = payload.from;
     const toPhone: string = payload.to;
-    if (!fromSip || !toPhone) return;
+    if (!fromRaw || !toPhone) return;
 
-    const agent = await this.findAgentBySipFrom(fromSip);
+    const agent = await this.findAgentForWebOutbound(fromRaw);
     if (!agent) {
       this.logger.warn(
-        `SIP outbound from unknown agent ${fromSip} — ignoring`,
+        `Web outbound from unknown agent (from=${fromRaw}) — ignoring`,
       );
       return;
     }
 
-    const canonicalSip = this.normalizeSipUri(fromSip);
-    if (agent.telnyxSipUri !== canonicalSip) {
-      await this.prisma.user.update({
-        where: { id: agent.id },
-        data: { telnyxSipUri: canonicalSip },
-      });
+    if (this.looksLikeSipFrom(fromRaw)) {
+      const canonicalSip = this.normalizeSipUri(fromRaw);
+      if (agent.telnyxSipUri !== canonicalSip) {
+        await this.prisma.user.update({
+          where: { id: agent.id },
+          data: { telnyxSipUri: canonicalSip },
+        });
+      }
     }
     if (!agent.assignedNumber) {
       this.logger.warn(
@@ -456,7 +459,7 @@ export class CallingWebhookController {
             ringingAt: new Date(),
             providerMetadata: {
               stage: "WEB_OUTBOUND",
-              fromSip: canonicalSip,
+              from: fromRaw,
             } as any,
           },
         })
@@ -470,7 +473,8 @@ export class CallingWebhookController {
             leadId: lead.id,
             agentId: agent.id,
             businessNumberId: agent.assignedNumber.id,
-            agentPhoneNumber: agent.phoneNumber || canonicalSip,
+            agentPhoneNumber:
+              agent.phoneNumber || agent.telnyxSipUri || fromRaw,
             customerNumber: toPhone,
             workspaceId: agent.workspaceId,
             origin: "web",
@@ -478,7 +482,7 @@ export class CallingWebhookController {
             ringingAt: new Date(),
             providerMetadata: {
               stage: "WEB_OUTBOUND",
-              fromSip: canonicalSip,
+              from: fromRaw,
             } as any,
           },
         });
@@ -590,6 +594,78 @@ export class CallingWebhookController {
     if (!from) return false;
     if (from.startsWith("sip:")) return true;
     return /@sip\.telnyx\./i.test(from);
+  }
+
+  private looksLikeE164(from: string | undefined): boolean {
+    return !!from && /^\+[1-9]\d{6,14}$/.test(from.trim());
+  }
+
+  private normalizePhone(phone: string): string {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+    return phone.startsWith("+") ? phone : `+${digits}`;
+  }
+
+  /**
+   * WebRTC outbound after Caller ID Override: `from` is the business line.
+   * Agent-first PSTN also uses business `from` but `to` is the agent's cell.
+   */
+  private async shouldRegisterWebOriginCall(payload: any): Promise<boolean> {
+    const from: string | undefined = payload?.from;
+    const to: string | undefined = payload?.to;
+    if (!from || !to) return false;
+
+    if (this.looksLikeSipFrom(from)) return true;
+
+    if (!this.looksLikeE164(from)) return false;
+
+    const business = await this.prisma.phoneNumber.findFirst({
+      where: {
+        phoneNumber: { in: [from, this.normalizePhone(from)] },
+      },
+      include: { assignedToUser: true },
+    });
+    if (!business?.assignedToUser) return false;
+
+    const agent = business.assignedToUser;
+    const toNorm = this.normalizePhone(to);
+    if (agent.phoneNumber) {
+      const agentNorm = this.normalizePhone(agent.phoneNumber);
+      if (toNorm === agentNorm) {
+        return false;
+      }
+    }
+
+    const pending = await this.prisma.call.findFirst({
+      where: {
+        agentId: agent.id,
+        customerNumber: { in: [to, toNorm] },
+        origin: "web",
+        providerCallSid: { startsWith: "pending-web-" },
+        initiatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+      },
+    });
+    if (pending) return true;
+
+    return true;
+  }
+
+  private async findAgentForWebOutbound(from: string) {
+    if (this.looksLikeSipFrom(from)) {
+      return this.findAgentBySipFrom(from);
+    }
+    if (this.looksLikeE164(from)) {
+      const normalized = this.normalizePhone(from);
+      const row = await this.prisma.phoneNumber.findFirst({
+        where: {
+          phoneNumber: { in: [from, normalized] },
+        },
+        include: { assignedToUser: { include: { assignedNumber: true } } },
+      });
+      return row?.assignedToUser ?? null;
+    }
+    return null;
   }
 
   private normalizeSipUri(uri: string): string {
