@@ -5,15 +5,17 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("🌱 Seeding database...\n");
 
-  const workspaceId = process.env.SEED_WORKSPACE_ID || "workspace-id";
-  const userId = process.env.SEED_USER_ID || "agent-id";
+  const workspaceId = process.env.SEED_WORKSPACE_ID || "3";
+  const userId = process.env.SEED_USER_ID || "3";
   const agentEmail =
     process.env.SEED_AGENT_EMAIL || `seed-agent-${userId}@warmchats.local`;
   const agentName = process.env.SEED_AGENT_NAME || "Test Agent";
   const agentPhoneNumber =
     process.env.SEED_AGENT_PHONE_NUMBER || "+18801234567890";
+  /** Must match Telnyx Caller ID Override on warmchat-webrtc (+1-559-383-9632). */
   const businessPhoneNumber =
     process.env.SEED_BUSINESS_PHONE_NUMBER || "+15593839632";
+  const legacyBusinessPhoneNumber = "+15593839633";
   const leadId = process.env.SEED_LEAD_ID || "lead-id";
   const leadPhoneNumber =
     process.env.SEED_LEAD_PHONE_NUMBER || "+18809876543210";
@@ -75,6 +77,14 @@ async function main() {
   });
   console.log("✅ Lead created:", lead.id);
 
+  // Align DB with Telnyx (+15593839633 typo → +15593839632) before upsert.
+  await alignBusinessLineWithTelnyx({
+    agentId: agent.id,
+    workspaceId: workspace.id,
+    correct: businessPhoneNumber,
+    legacy: legacyBusinessPhoneNumber,
+  });
+
   // ============================================
   // 4. CREATE PHONE NUMBER (FROM TELNYX)
   // ============================================
@@ -84,6 +94,7 @@ async function main() {
     update: {
       workspaceId: workspace.id,
       assignedToUserId: agent.id,
+      status: "ACTIVE",
     },
     create: {
       phoneNumber: businessPhoneNumber,
@@ -95,7 +106,7 @@ async function main() {
         sms: true,
       },
       workspaceId: workspace.id,
-      assignedToUserId: agent.id, // Assign to test agent
+      assignedToUserId: agent.id,
     },
   });
   console.log("✅ Phone number created:", phoneNumber.phoneNumber);
@@ -189,6 +200,66 @@ async function main() {
   console.log("   GET /api/admin/calling/configuration");
   console.log("   GET /api/calling/can-call");
   console.log("   GET /api/admin/calling/phone-numbers");
+}
+
+/**
+ * Telnyx webhooks use Caller ID Override (+15593839632). If the DB still has
+ * the old +15593839633 row, registerWebOriginCall cannot match the agent.
+ */
+async function alignBusinessLineWithTelnyx(opts: {
+  agentId: string;
+  workspaceId: string;
+  correct: string;
+  legacy: string;
+}): Promise<void> {
+  const { agentId, workspaceId, correct, legacy } = opts;
+  const legacyRow = await prisma.phoneNumber.findUnique({
+    where: { phoneNumber: legacy },
+  });
+  const correctRow = await prisma.phoneNumber.findUnique({
+    where: { phoneNumber: correct },
+  });
+
+  if (legacyRow) {
+    await prisma.phoneNumber.update({
+      where: { id: legacyRow.id },
+      data: { assignedToUserId: null },
+    });
+  }
+
+  if (legacyRow && !correctRow) {
+    await prisma.phoneNumber.update({
+      where: { id: legacyRow.id },
+      data: {
+        phoneNumber: correct,
+        providerSid: `seed:${correct}`,
+        assignedToUserId: agentId,
+        workspaceId,
+        status: "ACTIVE",
+      },
+    });
+    console.log(`✅ Business line renamed ${legacy} → ${correct}`);
+  } else if (legacyRow && correctRow) {
+    await prisma.phoneNumber.update({
+      where: { id: correctRow.id },
+      data: {
+        assignedToUserId: agentId,
+        workspaceId,
+        status: "ACTIVE",
+      },
+    });
+    console.log(`✅ Agent reassigned from ${legacy} to ${correct}`);
+  } else if (correctRow) {
+    await prisma.phoneNumber.update({
+      where: { id: correctRow.id },
+      data: { assignedToUserId: agentId, workspaceId, status: "ACTIVE" },
+    });
+  }
+
+  await prisma.call.updateMany({
+    where: { fromNumber: legacy, agentId },
+    data: { fromNumber: correct },
+  });
 }
 
 main()

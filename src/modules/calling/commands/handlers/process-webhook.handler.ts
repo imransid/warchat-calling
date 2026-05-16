@@ -6,6 +6,7 @@ import { TelephonyProviderFactory } from '../../infrastructure/telephony/telepho
 import { CompleteCallCommand } from '../impl';
 import { WebhookReceivedEvent, WebhookProcessedEvent } from '../../events/impl';
 import { CallStatus } from '@prisma/client';
+import { CallingGateway } from '../../gateway/calling.gateway';
 
 @CommandHandler(ProcessWebhookCommand)
 export class ProcessWebhookHandler
@@ -18,6 +19,7 @@ export class ProcessWebhookHandler
     private readonly telephonyFactory: TelephonyProviderFactory,
     private readonly eventBus: EventBus,
     private readonly commandBus: CommandBus,
+    private readonly gateway: CallingGateway,
   ) {}
 
   async execute(command: ProcessWebhookCommand): Promise<void> {
@@ -200,7 +202,8 @@ export class ProcessWebhookHandler
         });
         break;
 
-      case 'IN_PROGRESS':
+      case 'ANSWERED':
+      case 'IN_PROGRESS': {
         await this.prisma.call.update({
           where: { id: callId },
           data: {
@@ -218,7 +221,16 @@ export class ProcessWebhookHandler
             providerEventId: `${providerCallSid}-connected`,
           },
         });
+
+        this.gateway.emitToUser(call.agentId, 'call_state', {
+          callId: call.id,
+          status: 'IN_PROGRESS',
+          direction: call.direction,
+          origin: call.origin || 'phone',
+          answeredVia: call.answeredVia || (call.origin === 'web' ? 'web' : 'phone'),
+        });
         break;
+      }
 
       case 'COMPLETED':
       case 'NO_ANSWER':

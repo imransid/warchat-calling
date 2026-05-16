@@ -403,10 +403,10 @@ export class CallingWebhookController {
     const toPhone: string = payload.to;
     if (!fromRaw || !toPhone) return;
 
-    const agent = await this.findAgentForWebOutbound(fromRaw);
+    const agent = await this.findAgentForWebOutbound(fromRaw, toPhone);
     if (!agent) {
       this.logger.warn(
-        `Web outbound from unknown agent (from=${fromRaw}) — ignoring`,
+        `Web outbound from unknown agent (from=${fromRaw}, to=${toPhone}) — ignoring`,
       );
       return;
     }
@@ -618,6 +618,29 @@ export class CallingWebhookController {
 
     if (this.looksLikeSipFrom(from)) return true;
 
+    const toNorm = this.normalizePhone(to);
+    const pending = await this.prisma.call.findFirst({
+      where: {
+        customerNumber: { in: [to, toNorm] },
+        origin: "web",
+        providerCallSid: { startsWith: "pending-web-" },
+        initiatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+      },
+      include: {
+        agent: { include: { assignedNumber: true } },
+      },
+    });
+    if (pending?.agent) {
+      const agent = pending.agent;
+      if (agent.phoneNumber) {
+        const agentNorm = this.normalizePhone(agent.phoneNumber);
+        if (toNorm === agentNorm) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     if (!this.looksLikeE164(from)) return false;
 
     const business = await this.prisma.phoneNumber.findFirst({
@@ -629,7 +652,6 @@ export class CallingWebhookController {
     if (!business?.assignedToUser) return false;
 
     const agent = business.assignedToUser;
-    const toNorm = this.normalizePhone(to);
     if (agent.phoneNumber) {
       const agentNorm = this.normalizePhone(agent.phoneNumber);
       if (toNorm === agentNorm) {
@@ -637,25 +659,14 @@ export class CallingWebhookController {
       }
     }
 
-    const pending = await this.prisma.call.findFirst({
-      where: {
-        agentId: agent.id,
-        customerNumber: { in: [to, toNorm] },
-        origin: "web",
-        providerCallSid: { startsWith: "pending-web-" },
-        initiatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
-      },
-    });
-    if (pending) return true;
-
     return true;
   }
 
-  private async findAgentForWebOutbound(from: string) {
+  private async findAgentForWebOutbound(from: string, to?: string) {
     if (this.looksLikeSipFrom(from)) {
-      return this.findAgentBySipFrom(from);
-    }
-    if (this.looksLikeE164(from)) {
+      const agent = await this.findAgentBySipFrom(from);
+      if (agent) return agent;
+    } else if (this.looksLikeE164(from)) {
       const normalized = this.normalizePhone(from);
       const row = await this.prisma.phoneNumber.findFirst({
         where: {
@@ -663,8 +674,28 @@ export class CallingWebhookController {
         },
         include: { assignedToUser: { include: { assignedNumber: true } } },
       });
-      return row?.assignedToUser ?? null;
+      if (row?.assignedToUser) return row.assignedToUser;
     }
+
+    if (to && this.looksLikeE164(to)) {
+      const toNorm = this.normalizePhone(to);
+      const pending = await this.prisma.call.findFirst({
+        where: {
+          customerNumber: { in: [to, toNorm] },
+          origin: "web",
+          providerCallSid: { startsWith: "pending-web-" },
+          initiatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
+        },
+        include: { agent: { include: { assignedNumber: true } } },
+      });
+      if (pending?.agent) {
+        this.logger.log(
+          `Matched web outbound agent ${pending.agent.id} via pending call ${pending.id} (webhook from=${from})`,
+        );
+        return pending.agent;
+      }
+    }
+
     return null;
   }
 
