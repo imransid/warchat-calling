@@ -81,7 +81,10 @@ async function main() {
   console.log("\nCreating phone number...");
   const phoneNumber = await prisma.phoneNumber.upsert({
     where: { phoneNumber: businessPhoneNumber },
-    update: {},
+    update: {
+      workspaceId: workspace.id,
+      assignedToUserId: agent.id,
+    },
     create: {
       phoneNumber: businessPhoneNumber,
       provider: "telnyx",

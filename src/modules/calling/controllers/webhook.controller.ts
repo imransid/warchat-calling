@@ -119,7 +119,12 @@ export class CallingWebhookController {
       // Persist + route every event into the normal CQRS pipeline (handles
       // status updates, missed-SMS, usage metering, Socket.IO call_state).
       await this.commandBus.execute(
-        new ProcessWebhookCommand("telnyx", eventType, body, callControlId),
+        new ProcessWebhookCommand(
+          "telnyx",
+          eventType,
+          body,
+          `${callControlId}:${eventType}`,
+        ),
       );
 
       return res.status(HttpStatus.OK).send();
@@ -397,15 +402,20 @@ export class CallingWebhookController {
     const toPhone: string = payload.to;
     if (!fromSip || !toPhone) return;
 
-    const agent = await this.prisma.user.findFirst({
-      where: { telnyxSipUri: fromSip },
-      include: { assignedNumber: true },
-    });
+    const agent = await this.findAgentBySipFrom(fromSip);
     if (!agent) {
       this.logger.warn(
         `SIP outbound from unknown agent ${fromSip} — ignoring`,
       );
       return;
+    }
+
+    const canonicalSip = this.normalizeSipUri(fromSip);
+    if (agent.telnyxSipUri !== canonicalSip) {
+      await this.prisma.user.update({
+        where: { id: agent.id },
+        data: { telnyxSipUri: canonicalSip },
+      });
     }
     if (!agent.assignedNumber) {
       this.logger.warn(
@@ -424,25 +434,54 @@ export class CallingWebhookController {
 
     if (!agent.assignedNumber) return;
 
-    const call = await this.prisma.call.create({
-      data: {
-        providerCallSid: callControlId,
-        direction: "OUTBOUND",
-        status: "RINGING",
-        fromNumber: agent.assignedNumber.phoneNumber,
-        toNumber: toPhone,
-        leadId: lead.id,
+    const placeholder = await this.prisma.call.findFirst({
+      where: {
         agentId: agent.id,
-        businessNumberId: agent.assignedNumber.id,
-        agentPhoneNumber: agent.phoneNumber || agent.telnyxSipUri || "",
         customerNumber: toPhone,
-        workspaceId: agent.workspaceId,
         origin: "web",
-        initiatedAt: new Date(),
-        ringingAt: new Date(),
-        providerMetadata: { stage: "WEB_OUTBOUND", fromSip } as any,
+        providerCallSid: { startsWith: "pending-web-" },
+        status: { in: ["INITIATED", "RINGING"] },
+        initiatedAt: { gte: new Date(Date.now() - 5 * 60 * 1000) },
       },
+      orderBy: { initiatedAt: "desc" },
     });
+
+    const call = placeholder
+      ? await this.prisma.call.update({
+          where: { id: placeholder.id },
+          data: {
+            providerCallSid: callControlId,
+            status: "RINGING",
+            leadId: lead.id,
+            ringingAt: new Date(),
+            providerMetadata: {
+              stage: "WEB_OUTBOUND",
+              fromSip: canonicalSip,
+            } as any,
+          },
+        })
+      : await this.prisma.call.create({
+          data: {
+            providerCallSid: callControlId,
+            direction: "OUTBOUND",
+            status: "RINGING",
+            fromNumber: agent.assignedNumber.phoneNumber,
+            toNumber: toPhone,
+            leadId: lead.id,
+            agentId: agent.id,
+            businessNumberId: agent.assignedNumber.id,
+            agentPhoneNumber: agent.phoneNumber || canonicalSip,
+            customerNumber: toPhone,
+            workspaceId: agent.workspaceId,
+            origin: "web",
+            initiatedAt: new Date(),
+            ringingAt: new Date(),
+            providerMetadata: {
+              stage: "WEB_OUTBOUND",
+              fromSip: canonicalSip,
+            } as any,
+          },
+        });
 
     await this.prisma.callEvent.create({
       data: {
@@ -542,8 +581,53 @@ export class CallingWebhookController {
     }
   }
 
+  /**
+   * Telnyx WebRTC outbound webhooks use `from` like
+   * `gencred...@sip.telnyx.com` (no `sip:` prefix). Credential connections
+   * may also use regional hosts (.eu, .com.au, etc.).
+   */
   private looksLikeSipFrom(from: string | undefined): boolean {
-    return !!from && from.startsWith("sip:");
+    if (!from) return false;
+    if (from.startsWith("sip:")) return true;
+    return /@sip\.telnyx\./i.test(from);
+  }
+
+  private normalizeSipUri(uri: string): string {
+    const trimmed = uri.trim();
+    return trimmed.toLowerCase().startsWith("sip:")
+      ? trimmed
+      : `sip:${trimmed}`;
+  }
+
+  private sipUriUsername(uri: string): string | null {
+    const normalized = this.normalizeSipUri(uri);
+    const body = normalized.slice(4);
+    const at = body.indexOf("@");
+    if (at <= 0) return null;
+    return body.slice(0, at);
+  }
+
+  private async findAgentBySipFrom(fromSip: string) {
+    const canonical = this.normalizeSipUri(fromSip);
+    const username = this.sipUriUsername(fromSip);
+
+    const exact = await this.prisma.user.findFirst({
+      where: { telnyxSipUri: canonical },
+      include: { assignedNumber: true },
+    });
+    if (exact) return exact;
+
+    if (!username) return null;
+
+    const candidates = await this.prisma.user.findMany({
+      where: { telnyxSipUri: { not: null } },
+      include: { assignedNumber: true },
+    });
+    return (
+      candidates.find(
+        (u) => u.telnyxSipUri && this.sipUriUsername(u.telnyxSipUri) === username,
+      ) ?? null
+    );
   }
 
   /**
